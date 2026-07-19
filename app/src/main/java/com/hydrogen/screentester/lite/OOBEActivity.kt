@@ -63,6 +63,7 @@ class OOBEActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        DownloadState.cleanupCache(this)
         ThemeSettings.loadConfig(this)
 
         // 键盘弹起时不缩小窗口，防止 Canvas 红线被推上去
@@ -123,19 +124,24 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
     var updateHasUpdate by remember { mutableStateOf(false) }
     var updateVersionName by remember { mutableStateOf("") }
     var updateChangelog by remember { mutableStateOf("") }
+    var updateDownloadUrl by remember { mutableStateOf<String?>(null) }
     var updateChecking by remember { mutableStateOf(true) }
     var updateError by remember { mutableStateOf(false) }
     var showDownloadLinkDialog by remember { mutableStateOf(false) }
+    var showDownloadConfirm by remember { mutableStateOf(false) }
+    val downloadState = GlobalUpdateState.downloadState
+    DownloadProgressPoller(downloadState)
 
     val doUpdateCheck: () -> Unit = {
         updateChecking = true
         updateError = false
         UpdateManager.checkUpdate(
             context = context,
-            onResult = { has, version, log ->
+            onResult = { has, version, log, downloadUrl ->
                 updateHasUpdate = has
                 updateVersionName = version ?: ""
                 updateChangelog = log ?: ""
+                updateDownloadUrl = downloadUrl
                 updateChecking = false
             },
             onError = {
@@ -314,6 +320,14 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
             ) {
                 // 按钮行
                 val isDownloadPage = pagerState.currentPage == 1 && updateHasUpdate && !updateChecking
+                // 浏览器下载
+                if (isDownloadPage) {
+                    Box(Modifier.fillMaxWidth().padding(bottom = 4.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.clip(G2Shapes.button).clickable { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(UpdateManager.releasePageUrl()))) }.padding(horizontal = 12.dp, vertical = 2.dp)) {
+                            Text("浏览器下载", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                        }
+                    }
+                }
                 Box(modifier = Modifier.fillMaxWidth()) {
                     // 上一步（左对齐）
                     Box(modifier = Modifier.align(Alignment.CenterStart).alpha(skipAlpha)) {
@@ -329,14 +343,19 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                         }
                     }
 
-                    // 稍后按钮：更新页居中显示
+                    // 稍后按钮：下载中淡出，暂停/完成后淡入
+                    val isDownloadActive = isDownloadPage && downloadState.status == DownloadStatus.Downloading
                     if (isDownloadPage) {
                         val laterAlpha = remember { Animatable(0f) }
-                        LaunchedEffect(Unit) { laterAlpha.animateTo(1f, tween(300)) }
+                        val showLater = !isDownloadActive
+                        LaunchedEffect(showLater) {
+                            if (showLater) laterAlpha.animateTo(1f, tween(300)) else laterAlpha.animateTo(0f, tween(300))
+                        }
                         Box(modifier = Modifier.align(Alignment.Center).graphicsLayer { alpha = laterAlpha.value }) {
                             TextButton(
                                 onClick = {
                                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    if (downloadState.status == DownloadStatus.Paused) downloadState.cancel(context)
                                     scope.launch { pagerState.animateScrollToPage(2) }
                                 }
                             ) {
@@ -345,32 +364,37 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                         }
                     }
 
-                    // 主按钮（右对齐）
-                    Row(
-                        modifier = Modifier.align(Alignment.CenterEnd)
-                    ) {
-                        // 主按钮：文字过渡 + 宽度动画
-                        val mainButtonText = when {
-                            isDownloadPage -> "去下载"
-                            pagerState.currentPage == 0 -> "开始"
-                            pagerState.currentPage == 6 -> "开始使用"
-                            else -> "下一步"
-                        }
-                        val mainButtonWidth by animateDpAsState(
-                            targetValue = when {
-                                isDownloadPage -> 120.dp
-                                pagerState.currentPage == 0 -> 100.dp
-                                pagerState.currentPage == 6 -> 150.dp
-                                else -> 120.dp
-                            },
-                            animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
-                            label = "mainBtnWidth"
-                        )
+                    // 主按钮
+                    val mainButtonText = when {
+                        isDownloadPage -> "去下载"
+                        pagerState.currentPage == 0 -> "开始"
+                        pagerState.currentPage == 6 -> "开始使用"
+                        else -> "下一步"
+                    }
+                    val mainButtonWidth by animateDpAsState(
+                        targetValue = when {
+                            isDownloadActive -> 170.dp
+                            isDownloadPage -> 120.dp
+                            pagerState.currentPage == 0 -> 100.dp
+                            pagerState.currentPage == 6 -> 150.dp
+                            else -> 120.dp
+                        },
+                        animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
+                        label = "mainBtnWidth"
+                    )
+                    Row(modifier = Modifier.align(Alignment.CenterEnd)) {
                         Button(
                             onClick = {
                                 view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                 if (isDownloadPage) {
-                                    showDownloadLinkDialog = true
+                                    when (downloadState.status) {
+                                        DownloadStatus.Idle, DownloadStatus.Error -> { showDownloadConfirm = true }
+                                        DownloadStatus.Downloading -> downloadState.pause()
+                                        DownloadStatus.Paused -> {
+                                            downloadState.start(context, updateDownloadUrl ?: UpdateManager.releasePageUrl(), "ScreenTester_Lite_$updateVersionName.apk", scope)
+                                        }
+                                        DownloadStatus.Done -> downloadState.install(context, "ScreenTester_Lite_$updateVersionName.apk")
+                                    }
                                 } else if (pagerState.currentPage < 6) {
                                     scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
                                 } else {
@@ -382,11 +406,25 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
                             AnimatedContent(
-                                targetState = mainButtonText,
+                                targetState = when {
+                                    isDownloadActive -> 1
+                                    isDownloadPage && downloadState.status == DownloadStatus.Paused -> 2
+                                    isDownloadPage && downloadState.status == DownloadStatus.Error -> 3
+                                    isDownloadPage && downloadState.status == DownloadStatus.Done -> 4
+                                    isDownloadPage -> 5
+                                    else -> 0
+                                },
                                 transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
-                                label = "btnText"
-                            ) { text ->
-                                Text(text = text, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                label = "oobeMainState"
+                            ) { state ->
+                                when (state) {
+                                    1 -> Row { Text("已下载 ", fontWeight = FontWeight.Bold, fontSize = 15.sp); Text("${(downloadState.progress * 100).toInt()}%", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
+                                    2 -> Text("已暂停", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    3 -> Text("下载失败", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    4 -> Text("安装", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    5 -> Text("去下载", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    else -> Text(mainButtonText, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                }
                             }
                         }
                     }
@@ -491,12 +529,28 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
             )
         }
 
-        // 去下载链接确认弹窗
-        if (showDownloadLinkDialog) {
-            LinkConfirmDialog(
-                url = "https://github.com/byHydrogen/ScreenTester-Lite/releases",
-                onDismiss = { showDownloadLinkDialog = false }
-            )
+        // 下载确认弹窗
+        if (showDownloadConfirm) {
+            val confirmSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { showDownloadConfirm = false },
+                containerColor = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(topStart = getSystemCornerRadius(), topEnd = getSystemCornerRadius()),
+                sheetState = confirmSheetState, scrimColor = Color.Black.copy(alpha = 0.5f),
+                dragHandle = { Box(Modifier.padding(vertical = 12.dp).width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))) }
+            ) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
+                    Text("下载更新", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(16.dp))
+                    Text("是否下载更新包？", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(24.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { confirmSheetState.hide(); showDownloadConfirm = false } }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("否") }
+                        Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); val url = updateDownloadUrl ?: UpdateManager.releasePageUrl(); scope.launch { confirmSheetState.hide(); showDownloadConfirm = false }.invokeOnCompletion { downloadState.start(context, url, "ScreenTester_Lite_$updateVersionName.apk", scope) } }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("是", fontWeight = FontWeight.Bold) }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
         }
     }
 }
@@ -639,9 +693,9 @@ fun OOBEUpdateStep(
         fun CurrentVersionCard() {
             Surface(modifier = Modifier.fillMaxWidth(), shape = G2Shapes.card, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
                 Column(modifier = Modifier.padding(20.dp).heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                    Text("当前版本 1.0 更新日志", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("当前版本 1.1 更新日志", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(8.dp))
-                    MarkdownText(text = "ScreenTester Lite 首个版本", fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
+                    MarkdownText(text = "新增 支持应用内下载更新包\n新增 Gitee 更新下载源\n新增 设置页 下载与更新卡片（切换下载源）\n新增 设置页 渐变色条 蓝粉预设方案\n新增 设置页 渐变色条 海洋预设方案\n移除 设置页 渐变色条 莫奈色预设方案\n修复 黑边遮挡测试 渐变色条和设置预览时显示不一致的问题\n修改 关于页 更新日志卡片 版本更新卡片", fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
                 }
             }
         }

@@ -180,6 +180,8 @@ object GlobalUpdateState {
     var hasNewVersion by mutableStateOf(false)
     var latestVersionName by mutableStateOf("")
     var latestChangelog by mutableStateOf("")
+    var latestDownloadUrl by mutableStateOf<String?>(null)
+    val downloadState = DownloadState()
 }
 
 class MainActivity : ComponentActivity() {
@@ -191,15 +193,15 @@ class MainActivity : ComponentActivity() {
         // 应用启动时静默检查更新
         UpdateManager.checkUpdate(
             context = this,
-            onResult = { hasUpdate, version, changelog ->
+            onResult = { hasUpdate, version, changelog, downloadUrl ->
                 if (hasUpdate && version != null) {
-                    // 确保远程版本确实更高
                     val pInfo = packageManager.getPackageInfo(packageName, 0)
                     val localVersion = pInfo.versionName ?: ""
                     if (UpdateManager.isVersionGreater(version, localVersion)) {
                         GlobalUpdateState.hasNewVersion = true
                         GlobalUpdateState.latestVersionName = version
                         GlobalUpdateState.latestChangelog = changelog ?: ""
+                        GlobalUpdateState.latestDownloadUrl = downloadUrl
                     }
                 }
             }

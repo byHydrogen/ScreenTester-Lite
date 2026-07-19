@@ -259,52 +259,36 @@ fun AboutPage() {
                                 val aboutButtonG2Shape = G2Shapes.aboutButton
 
                                 // 版本更新卡片
+                                var showUpdateSheet by remember { mutableStateOf(false) }
                                 val newVersionCardShape = G2Shapes.newVersionCard
 
                                 AnimatedVisibility(visible = hasNewVersion) {
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp).clip(newVersionCardShape).clickable { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); showUpdateSheet = true },
                                         shape = newVersionCardShape,
-                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
                                     ) {
-                                        Column(modifier = Modifier.padding(20.dp)) {
-                                            Text(text = "发现新版本：$latestVersionName", fontWeight = FontWeight.Black, fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
-                                            Spacer(Modifier.height(8.dp))
-                                            MarkdownText(text = latestChangelog, fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it })
-                                            Spacer(Modifier.height(16.dp))
-
-                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                                TextButton(
-                                                    onClick = {
-                                                        hasNewVersion = false
-                                                        UpdateManager.ignoreVersion(context, latestVersionName)
-                                                    },
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Text("忽略此版本", fontSize = 13.sp)
-                                                }
-                                                Button(
-                                                    onClick = {
-                                                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                                        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/byHydrogen/ScreenTester-Lite/releases")))
-                                                    },
-                                                    modifier = Modifier.weight(1f),
-                                                    shape = aboutButtonG2Shape,
-                                                    contentPadding = PaddingValues(0.dp)
-                                                ) {
-                                                    Text("去下载", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                                }
+                                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.SystemUpdate, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("发现新版本：$latestVersionName", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                                Text("点击查看详情", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
                                             }
+                                            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f))
                                         }
                                     }
                                 }
 
+                                if (showUpdateSheet) {
+                                    UpdateSheetDialog(onDismiss = { showUpdateSheet = false })
+                                }
+
                                 // 当前版本信息
-                                Text(text = "版本 1.0", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.primary)
+                                Text(text = "版本 1.1", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.primary)
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    text = "ScreenTester Lite 首个版本",
+                                    text = "新增 支持应用内下载更新包\n新增 Gitee 更新下载源\n新增 设置页 下载与更新卡片（切换下载源）\n新增 设置页 渐变色条 蓝粉预设方案\n新增 设置页 渐变色条 海洋预设方案\n移除 设置页 渐变色条 莫奈色预设方案\n修复 黑边遮挡测试 渐变色条和设置预览时显示不一致的问题\n修改 关于页 更新日志卡片 版本更新卡片",
                                     fontSize = 13.sp,
                                     lineHeight = 18.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -321,7 +305,7 @@ fun AboutPage() {
                                             UpdateManager.checkUpdate(
                                                 context,
                                                 isManual = true,
-                                                onResult = { hasUpdate, version, changelog ->
+                                                onResult = { hasUpdate, version, changelog, _ ->
                                                     isCheckingUpdate = false
                                                     if (hasUpdate && version != null) {
                                                         if (UpdateManager.isVersionGreater(version, versionName)) {
