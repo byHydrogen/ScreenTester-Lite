@@ -42,6 +42,10 @@ object ThemeSettings {
     // 精简黑边遮挡测试页文字开关状态
     var isCompactModeEnabled by mutableStateOf(false)
 
+    // 黑边遮挡测试长按退出：开关 + 秒数（3-20，默认5）
+    var longPressExitEnabled by mutableStateOf(true)
+    var longPressExitSeconds by mutableIntStateOf(5)
+
     // 主页测试项视图模式：true=网格模式，false=列表模式
     var isGridView by mutableStateOf(false)
 
@@ -52,6 +56,9 @@ object ThemeSettings {
 
     // 更新下载源
     var updateDownloadSource by mutableStateOf("gitee")
+
+    // 自动检查更新开关（默认开启，关闭后只能手动检查）
+    var autoCheckUpdateEnabled by mutableStateOf(true)
 
     fun saveUpdateSource(context: Context, source: String) {
         if (updateDownloadSource == source) return
@@ -75,6 +82,12 @@ object ThemeSettings {
     fun saveConfig(context: Context, config: DarkModeConfig) {
         darkModeState = config
         context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putString("dark_mode", config.name).apply()
+    }
+
+    // 保存自动检查更新开关
+    fun saveAutoCheckUpdate(context: Context, enabled: Boolean) {
+        autoCheckUpdateEnabled = enabled
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("auto_check_update_enabled", enabled).apply()
     }
 
     fun saveLineColor(context: Context, color: Int) {
@@ -112,6 +125,17 @@ object ThemeSettings {
     fun saveCompactModeConfig(context: Context, enabled: Boolean) {
         isCompactModeEnabled = enabled
         context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("is_compact_mode_enabled", enabled).apply()
+    }
+
+    // 保存黑边遮挡测试长按退出设置
+    fun saveLongPressExitConfig(context: Context, enabled: Boolean) {
+        longPressExitEnabled = enabled
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("long_press_exit_enabled", enabled).apply()
+    }
+
+    fun saveLongPressExitSeconds(context: Context, seconds: Int) {
+        longPressExitSeconds = seconds.coerceIn(3, 20)
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putInt("long_press_exit_seconds", seconds.coerceIn(3, 20)).apply()
     }
 
     // 保存视图模式设置
@@ -246,6 +270,10 @@ object ThemeSettings {
         // 读取精简黑边遮挡测试页文字设置
         isCompactModeEnabled = prefs.getBoolean("is_compact_mode_enabled", false)
 
+        // 读取黑边遮挡测试长按退出设置
+        longPressExitEnabled = prefs.getBoolean("long_press_exit_enabled", true)
+        longPressExitSeconds = prefs.getInt("long_press_exit_seconds", 5).coerceIn(3, 20)
+
         // 读取视图模式设置
         isGridView = prefs.getBoolean("is_grid_view", false)
 
@@ -264,6 +292,9 @@ object ThemeSettings {
 
         // 读取更新下载源
         updateDownloadSource = prefs.getString("update_source", "gitee") ?: "gitee"
+
+        // 读取自动检查更新开关
+        autoCheckUpdateEnabled = prefs.getBoolean("auto_check_update_enabled", true)
 
         // 读取外观设置
         val savedDark = prefs.getString("dark_mode", DarkModeConfig.FOLLOW_SYSTEM.name)

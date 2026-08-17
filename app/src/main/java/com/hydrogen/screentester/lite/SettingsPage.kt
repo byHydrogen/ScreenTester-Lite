@@ -1256,6 +1256,120 @@ fun SettingsPage() {
                                         }
                                     )
                                 }
+
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+
+                                // 长按退出
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("长按退出", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                        Text("关闭后只能按返回键退出黑边遮挡测试", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Switch(
+                                        checked = ThemeSettings.longPressExitEnabled,
+                                        onCheckedChange = {
+                                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                            ThemeSettings.saveLongPressExitConfig(context, it)
+                                        }
+                                    )
+                                }
+
+                                // 长按退出秒数
+                                AnimatedVisibility(visible = ThemeSettings.longPressExitEnabled) {
+                                    Column(Modifier.padding(top = 12.dp)) {
+                                        val exitScope = rememberCoroutineScope()
+                                        val exitFocusManager = LocalFocusManager.current
+                                        val exitAnim = remember { Animatable(ThemeSettings.longPressExitSeconds.toFloat()) }
+                                        var exitInput by remember { mutableStateOf(ThemeSettings.longPressExitSeconds.toString()) }
+                                        var isExitFocused by remember { mutableStateOf(false) }
+
+                                        LaunchedEffect(exitAnim.value) {
+                                            if (!isExitFocused) {
+                                                exitInput = exitAnim.value.roundToInt().toString()
+                                            }
+                                            ThemeSettings.saveLongPressExitSeconds(context, exitAnim.value.roundToInt())
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("长按退出时长", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                            // 重置按钮
+                                            IconButton(
+                                                onClick = {
+                                                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                                    exitInput = "5"
+                                                    exitScope.launch {
+                                                        exitAnim.animateTo(
+                                                            targetValue = 5f,
+                                                            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.size(30.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Refresh,
+                                                    contentDescription = "重置",
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                                )
+                                            }
+
+                                            Spacer(Modifier.weight(1f))
+
+                                            // 数值编辑框
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier
+                                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                                            ) {
+                                                BasicTextField(
+                                                    value = exitInput,
+                                                    onValueChange = { newVal ->
+                                                        if (newVal.length <= 2) {
+                                                            val num = newVal.toIntOrNull()
+                                                            if (num != null) {
+                                                                if (num > 20) {
+                                                                    exitInput = "20"
+                                                                    exitScope.launch { exitAnim.animateTo(20f, tween(400)) }
+                                                                } else {
+                                                                    exitInput = newVal
+                                                                    exitScope.launch { exitAnim.animateTo(num.toFloat().coerceAtLeast(3f), tween(400)) }
+                                                                }
+                                                            } else if (newVal.isEmpty()) {
+                                                                exitInput = ""
+                                                            }
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .width(IntrinsicSize.Min)
+                                                        .widthIn(min = 35.dp)
+                                                        .onFocusChanged { isExitFocused = it.isFocused },
+                                                    textStyle = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center),
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                                                    keyboardActions = KeyboardActions(onDone = { exitFocusManager.clearFocus() }),
+                                                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary)
+                                                )
+                                                Text("秒", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 2.dp))
+                                            }
+                                        }
+
+                                        Spacer(Modifier.height(8.dp))
+
+                                        HapticSlider(
+                                            l = "",
+                                            c = MaterialTheme.colorScheme.primary,
+                                            v = (exitAnim.value - 3f) / 17f
+                                        ) {
+                                            exitFocusManager.clearFocus()
+                                            val newValue = it * 17f + 3f
+                                            exitScope.launch { exitAnim.snapTo(newValue) }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1382,6 +1496,24 @@ fun SettingsPage() {
                         AnimatedVisibility(visible = isDownloadExp) {
                             Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 16.dp)) {
                                 HorizontalDivider(Modifier.padding(bottom = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(0.1f))
+
+                                // 自动检查更新
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("自动检查更新", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                        Text("关闭后只能在关于页手动检查更新", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Switch(
+                                        checked = ThemeSettings.autoCheckUpdateEnabled,
+                                        onCheckedChange = {
+                                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                            ThemeSettings.saveAutoCheckUpdate(context, it)
+                                        }
+                                    )
+                                }
+
+                                Spacer(Modifier.height(16.dp))
+
                                 Text("更新下载源", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                                 Spacer(Modifier.height(10.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

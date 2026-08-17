@@ -287,12 +287,18 @@ class TestFrameView @JvmOverloads constructor(
                 canvas.drawText("@byHydrogen", centerX, centerY + 140f, textPaint)
             }
         } else {
+            // 长按退出提示文案：随设置动态变化
+            val exitHint = if (ThemeSettings.longPressExitEnabled) {
+                "按返回键 或 长按${ThemeSettings.longPressExitSeconds}秒 退出"
+            } else {
+                "按返回键退出"
+            }
             if (remainingSeconds > 0) {
                 if (countdownStartTime > 0L && elapsed < totalDuration) {
                     if (elapsed < 100f) {
                         val outProgress = (1f - (elapsed / 100f)).coerceIn(0f, 1f)
                         textPaint.alpha = (140 * outProgress).toInt()
-                        canvas.drawText("按返回键 或 长按5秒 退出", centerX, centerY + 140f, textPaint)
+                        canvas.drawText(exitHint, centerX, centerY + 140f, textPaint)
                     } else {
                         val inProgress = ((elapsed - 100f) / 150f).coerceIn(0f, 1f)
                         textPaint.alpha = (140 * inProgress).toInt()
@@ -304,7 +310,7 @@ class TestFrameView @JvmOverloads constructor(
                 }
             } else {
                 textPaint.alpha = 140
-                canvas.drawText("按返回键 或 长按5秒 退出", centerX, centerY + 140f, textPaint)
+                canvas.drawText(exitHint, centerX, centerY + 140f, textPaint)
             }
         }
     }
