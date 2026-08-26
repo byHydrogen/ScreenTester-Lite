@@ -1,8 +1,14 @@
 package com.hydrogen.screentester.lite
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.HapticFeedbackConstants
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -131,6 +137,16 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
     var showDownloadConfirm by remember { mutableStateOf(false) }
     val downloadState = GlobalUpdateState.downloadState
     DownloadProgressPoller(downloadState)
+
+    val notifPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        downloadState.start(context, updateDownloadUrl ?: UpdateManager.releasePageUrl(), "ScreenTester_Lite_$updateVersionName.apk")
+    }
+    fun startDownloadWithPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS); return
+        }
+        downloadState.start(context, updateDownloadUrl ?: UpdateManager.releasePageUrl(), "ScreenTester_Lite_$updateVersionName.apk")
+    }
 
     val doUpdateCheck: () -> Unit = {
         updateChecking = true
@@ -390,9 +406,7 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                                     when (downloadState.status) {
                                         DownloadStatus.Idle, DownloadStatus.Error -> { showDownloadConfirm = true }
                                         DownloadStatus.Downloading -> downloadState.pause()
-                                        DownloadStatus.Paused -> {
-                                            downloadState.start(context, updateDownloadUrl ?: UpdateManager.releasePageUrl(), "ScreenTester_Lite_$updateVersionName.apk", scope)
-                                        }
+                                        DownloadStatus.Paused -> { startDownloadWithPermission() }
                                         DownloadStatus.Done -> downloadState.install(context, "ScreenTester_Lite_$updateVersionName.apk")
                                     }
                                 } else if (pagerState.currentPage < 6) {
@@ -546,7 +560,7 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                     Spacer(Modifier.height(24.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { confirmSheetState.hide(); showDownloadConfirm = false } }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("否") }
-                        Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); val url = updateDownloadUrl ?: UpdateManager.releasePageUrl(); scope.launch { confirmSheetState.hide(); showDownloadConfirm = false }.invokeOnCompletion { downloadState.start(context, url, "ScreenTester_Lite_$updateVersionName.apk", scope) } }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("是", fontWeight = FontWeight.Bold) }
+                        Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { confirmSheetState.hide(); showDownloadConfirm = false }; startDownloadWithPermission() }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("是", fontWeight = FontWeight.Bold) }
                     }
                     Spacer(Modifier.height(16.dp))
                 }
@@ -693,9 +707,9 @@ fun OOBEUpdateStep(
         fun CurrentVersionCard() {
             Surface(modifier = Modifier.fillMaxWidth(), shape = G2Shapes.card, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
                 Column(modifier = Modifier.padding(20.dp).heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                    Text("当前版本 1.2 更新日志", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("当前版本 2.0 更新日志", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(8.dp))
-                    MarkdownText(text = "新增 设置页 自定义黑边遮挡测试 长按退出 开关\n新增 设置页 自定义黑边遮挡测试 自定义退出时长 滑块\n新增 设置页 下载与更新 自动检查更新开关\n优化 主页 首次启动时的「加入QQ交流群」弹窗（改为显示横幅，30秒后自动消失）\n修复 系统导航为导航键时 底栏被遮挡的问题\n修复 了一些已知问题", fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
+                    MarkdownText(text = "新增 测试亮度设置 测试页屏幕常亮 开关\n修复 黑边遮挡测试 精度模式 遮挡宽度毫米数值（改为按设备屏幕实际密度动态计算）\n修复 了一些已知问题", fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
                 }
             }
         }

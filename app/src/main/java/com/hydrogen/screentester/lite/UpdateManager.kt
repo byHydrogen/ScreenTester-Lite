@@ -58,7 +58,9 @@ object UpdateManager {
                 val body = json.optString("body", "")
                 val assets = json.optJSONArray("assets")
                 val downloadUrl = if (assets != null && assets.length() > 0) {
-                    assets.getJSONObject(0).optString("browser_download_url", "").ifEmpty { null }
+                    (0 until assets.length())
+                        .mapNotNull { i -> assets.optJSONObject(i)?.optString("browser_download_url", "") }
+                        .firstOrNull { it.isNotEmpty() && it.endsWith(".apk", ignoreCase = true) }
                 } else null
 
                 val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)

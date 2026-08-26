@@ -4,6 +4,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.core.app.NotificationCompat
 import androidx.compose.runtime.getValue
@@ -14,6 +16,7 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -30,11 +33,14 @@ class DownloadState {
 
     private var job: Job? = null
     @Volatile private var paused = false
-    private var expectedSize: Long = 0L
+    @Volatile private var expectedSize: Long = 0L
     private var notifyMgr: NotificationManager? = null
     private val notifyId = 1001
 
-    fun start(context: Context, url: String, fileName: String, scope: CoroutineScope) {
+    // 独立协程作用域 弹窗关闭/页面切换不会中断下载
+    private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    fun start(context: Context, url: String, fileName: String) {
         if (status == DownloadStatus.Downloading) return
         // 清理旧缓存
         cleanupCache(context)
@@ -44,7 +50,7 @@ class DownloadState {
         paused = false
         createNotification(context)
 
-        job = scope.launch(Dispatchers.IO) {
+        job = downloadScope.launch {
             try {
                 val file = File(context.cacheDir, "updates/$fileName")
                 file.parentFile?.mkdirs()
@@ -96,35 +102,40 @@ class DownloadState {
         conn.connectTimeout = 10000
         conn.readTimeout = 30000
         conn.connect()
-
-        val totalBytes = conn.contentLength.toLong()
-        expectedSize = totalBytes
-        val fos = FileOutputStream(file)
-        var downloaded = 0L
-        conn.inputStream.use { input ->
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
-            while (input.read(buffer).also { bytesRead = it } != -1 && !paused) {
-                fos.write(buffer, 0, bytesRead)
-                downloaded += bytesRead
-                if (totalBytes > 0) {
-                    val p = downloaded.toFloat() / totalBytes.toFloat()
-                    withContext(Dispatchers.Main) {
-                        progress = p
-                        updateNotification(context, p)
+        try {
+            val totalBytes = conn.contentLength.toLong()
+            expectedSize = totalBytes
+            FileOutputStream(file).use { fos ->
+                var downloaded = 0L
+                conn.inputStream.use { input ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1 && !paused) {
+                        fos.write(buffer, 0, bytesRead)
+                        downloaded += bytesRead
+                        if (totalBytes > 0) {
+                            val p = downloaded.toFloat() / totalBytes.toFloat()
+                            withContext(Dispatchers.Main) {
+                                progress = p
+                                updateNotification(context, p)
+                            }
+                        }
                     }
                 }
             }
-            fos.close()
+        } finally {
+            conn.disconnect()
         }
-        if (paused) file.delete() // 清理未完成文件
+        if (paused) file.delete()
     }
 
     private fun createNotification(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notifyMgr = nm
-        val channel = NotificationChannel("download", "下载通知", NotificationManager.IMPORTANCE_LOW)
-        nm.createNotificationChannel(channel)
+        // 通知渠道为 Android 8.0(API 26)+ 特性，低版本无需创建
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(NotificationChannel("download", "下载通知", NotificationManager.IMPORTANCE_LOW))
+        }
         val n = NotificationCompat.Builder(context, "download")
             .setContentTitle("正在下载更新")
             .setContentText("0%")
@@ -184,13 +195,39 @@ class DownloadState {
             }, 3000)
             return
         }
+        // 未授予"安装未知应用"权限时，引导用户去系统设置开启（该机制为 Android 8.0+；Android 7.x 使用全局"未知来源"开关，直接尝试安装）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+            try {
+                context.startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+                status = DownloadStatus.Error
+                errorMessage = "无法打开安装权限设置"
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (status == DownloadStatus.Error) status = DownloadStatus.Idle
+                }, 3000)
+            }
+            return
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            status = DownloadStatus.Error
+            errorMessage = "无法启动安装，请重试"
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (status == DownloadStatus.Error) status = DownloadStatus.Idle
+            }, 3000)
+        }
     }
 
     companion object {
