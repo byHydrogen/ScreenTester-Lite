@@ -2,6 +2,7 @@ package com.hydrogen.screentester.lite
 
 import android.annotation.SuppressLint
 import android.os.Bundle
+import android.os.Build
 import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -90,50 +91,6 @@ class CachedG2Shape(
     }
 }
 
-// 可缓存的 SmoothCorner Shape 类（用于 HDR 等页面，圆角公式与 CachedG2Shape 不同）
-class CachedSmoothCornerShape(
-    private val radius: androidx.compose.ui.unit.Dp
-) : androidx.compose.ui.graphics.Shape {
-    private var cachedSize: androidx.compose.ui.geometry.Size? = null
-    private var cachedOutline: androidx.compose.ui.graphics.Outline? = null
-
-    override fun createOutline(
-        size: androidx.compose.ui.geometry.Size,
-        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-        density: androidx.compose.ui.unit.Density
-    ): androidx.compose.ui.graphics.Outline {
-        if (cachedSize == size && cachedOutline != null) {
-            return cachedOutline!!
-        }
-
-        val r = with(density) { radius.toPx() }
-        val w = size.width
-        val h = size.height
-        val maxR = minOf(w / 2f, h / 2f)
-        val finalR = if (r > maxR) maxR else r
-
-        val path = Path().apply {
-            val factor = 1.52f
-            val c = finalR * factor
-            moveTo(c, 0f)
-            lineTo(w - c, 0f)
-            cubicTo(w - finalR * 0.55f, 0f, w, finalR * 0.55f, w, c)
-            lineTo(w, h - c)
-            cubicTo(w, h - finalR * 0.55f, w - finalR * 0.55f, h, w - c, h)
-            lineTo(c, h)
-            cubicTo(finalR * 0.55f, h, 0f, h - finalR * 0.55f, 0f, h - c)
-            lineTo(0f, c)
-            cubicTo(0f, finalR * 0.55f, finalR * 0.55f, 0f, c, 0f)
-            close()
-        }
-
-        val outline = androidx.compose.ui.graphics.Outline.Generic(path)
-        cachedSize = size
-        cachedOutline = outline
-        return outline
-    }
-}
-
 // 预定义的常用 G2 Shape 实例
 object G2Shapes {
     val navBar = CachedG2Shape(37f, 0.55f)
@@ -148,8 +105,6 @@ object G2Shapes {
     val aboutButton = CachedG2Shape(13f, 0.45f)
     val newVersionCard = CachedG2Shape(20f, 0.45f)
     val logo = CachedG2Shape(24f, 0.45f)
-    val hdrCard = CachedSmoothCornerShape(24.dp)
-    val hdrInnerCard = CachedSmoothCornerShape(16.dp)
 }
 
 // 获取系统圆角半径
@@ -224,6 +179,10 @@ class MainActivity : ComponentActivity() {
                         androidx.core.view.WindowInsetsControllerCompat(window, view).apply {
                             isAppearanceLightStatusBars = !isDark
                             isAppearanceLightNavigationBars = !isDark
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            // 关闭三键导航栏的半透明对比遮罩
+                            window.isNavigationBarContrastEnforced = false
                         }
                     }
                 }

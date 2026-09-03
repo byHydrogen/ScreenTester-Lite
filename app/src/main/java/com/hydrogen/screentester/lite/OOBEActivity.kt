@@ -81,6 +81,13 @@ class OOBEActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // 渲染进摄像头挖孔区域，避免全屏时挖孔处出现黑条（等效系统"刘海屏：自动匹配"）
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+
         // 检查是否已完成 OOBE
         val prefs = getSharedPreferences("oobe_prefs", MODE_PRIVATE)
         if (prefs.getBoolean("oobe_completed", false)) {
@@ -707,9 +714,9 @@ fun OOBEUpdateStep(
         fun CurrentVersionCard() {
             Surface(modifier = Modifier.fillMaxWidth(), shape = G2Shapes.card, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
                 Column(modifier = Modifier.padding(20.dp).heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                    Text("当前版本 2.0 更新日志", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("当前版本 2.5 更新日志", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(8.dp))
-                    MarkdownText(text = "新增 测试亮度设置 测试页屏幕常亮 开关\n修复 黑边遮挡测试 精度模式 遮挡宽度毫米数值（改为按设备屏幕实际密度动态计算）\n修复 了一些已知问题", fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
+                    MarkdownText(text = "重构 主页 网格/列表\n新增 主页 全新 卡片视图切换动画\n优化 主页 搜索测试项结果卡片动画\n修复 主页 网格视图下搜索时卡片未重排的问题\n修复 Android 15 以下 Android 版本 主界面 导航条有半透明遮罩的问题\n修复 Android 15 以下 Android 版本 历史更新日志页 导航条有半透明遮罩的问题\n修复 Android 15 以下 Android 版本 赞赏页 导航条有半透明遮罩的问题\n修复 部分 Android 设备 测试页始终显示刘海的问题（渲染进摄像头挖孔区域，避免全屏时挖孔处出现黑条）\n修复 了一些已知问题", fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -1243,7 +1250,7 @@ fun OOBEAdvancedUIStep(isDark: Boolean) {
                     Text("启用卡片动效", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = if (isEnabled) "已开启 - 卡片将带有淡入淡出效果" else "已关闭 - 卡片将直接显示",
+                        text = if (isEnabled) "已开启 - 卡片将带有更多动画效果" else "已关闭 - 卡片将直接显示",
                         fontSize = 13.sp,
                         color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )

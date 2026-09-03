@@ -3,6 +3,7 @@ package com.hydrogen.screentester.lite
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.os.Bundle
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.HapticFeedbackConstants
@@ -42,6 +43,10 @@ import com.hydrogen.screentester.lite.ui.theme.ScreenTesterTheme
 class DonateActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // 关闭三键导航栏的半透明对比遮罩
+            window.isNavigationBarContrastEnforced = false
+        }
         super.onCreate(savedInstanceState)
         setContent {
             ScreenTesterTheme {

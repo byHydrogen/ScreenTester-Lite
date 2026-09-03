@@ -1,6 +1,7 @@
 package com.hydrogen.screentester.lite
 
 import android.os.Bundle
+import android.os.Build
 import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -35,6 +36,10 @@ class AllChangelogActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // 关闭三键导航栏的半透明对比遮罩
+            window.isNavigationBarContrastEnforced = false
+        }
         setContent {
             val isDark = when (ThemeSettings.darkModeState) {
                 DarkModeConfig.FOLLOW_SYSTEM -> isSystemInDarkTheme()
@@ -93,6 +98,7 @@ fun AllChangelogScreen(isDark: Boolean, onBack: () -> Unit) {
 
     val changelogs = remember {
         listOf(
+            "2.5" to "重构 主页 网格/列表\n新增 主页 全新 卡片视图切换动画\n优化 主页 搜索测试项结果卡片动画\n修复 主页 网格视图下搜索时卡片未重排的问题\n修复 Android 15 以下 Android 版本 主界面 导航条有半透明遮罩的问题\n修复 Android 15 以下 Android 版本 历史更新日志页 导航条有半透明遮罩的问题\n修复 Android 15 以下 Android 版本 赞赏页 导航条有半透明遮罩的问题\n修复 部分 Android 设备 测试页始终显示刘海的问题（渲染进摄像头挖孔区域，避免全屏时挖孔处出现黑条）\n修复 了一些已知问题",
             "2.0" to "新增 测试亮度设置 测试页屏幕常亮 开关\n修复 黑边遮挡测试 精度模式 遮挡宽度毫米数值（改为按设备屏幕实际密度动态计算）\n修复 了一些已知问题",
             "1.2" to "新增 设置页 自定义黑边遮挡测试 长按退出 开关\n新增 设置页 自定义黑边遮挡测试 自定义退出时长 滑块\n新增 设置页 下载与更新 自动检查更新开关\n优化 主页 首次启动时的「加入QQ交流群」弹窗（改为显示横幅，30秒后自动消失）\n修复 系统导航为导航键时 底栏被遮挡的问题\n修复 了一些已知问题",
             "1.1" to "新增 支持应用内下载更新包\n新增 Gitee 更新下载源\n新增 设置页 下载与更新卡片（切换下载源）\n新增 设置页 渐变色条 蓝粉预设方案\n新增 设置页 渐变色条 海洋预设方案\n移除 设置页 渐变色条 莫奈色预设方案\n修复 黑边遮挡测试 渐变色条和设置预览时显示不一致的问题\n修改 关于页 更新日志卡片 版本更新卡片",
@@ -203,7 +209,7 @@ fun AllChangelogScreen(isDark: Boolean, onBack: () -> Unit) {
                                         val lines = logText.split("\n")
                                         val result = mutableListOf<LogLineItem>()
                                         var idx = 0
-                                        val tags = listOf("新增", "优化", "修复", "调整", "补充", "修改", "移除")
+                                        val tags = listOf("新增", "优化", "重构", "修复", "调整", "补充", "修改", "移除")
 
                                         while (idx < lines.size) {
                                             val line = lines[idx].trim()
@@ -303,6 +309,7 @@ fun TagBadge(tag: String, isDark: Boolean, modifier: Modifier = Modifier) {
     val containerColor = when (tag) {
         "新增" -> if (isDark) Color(0xFF2A3A2E) else Color(0xFFD2E7D6)
         "优化" -> if (isDark) Color(0xFF25354A) else Color(0xFFD2E4FF)
+        "重构" -> if (isDark) Color(0xFF1F3A38) else Color(0xFFD2F0ED)
         "修复" -> if (isDark) Color(0xFF422B2D) else Color(0xFFFAD8D8)
         "调整" -> if (isDark) Color(0xFF332B45) else Color(0xFFE9DFF5)
         "补充" -> if (isDark) Color(0xFF3D3228) else Color(0xFFFAE3CB)
@@ -313,6 +320,7 @@ fun TagBadge(tag: String, isDark: Boolean, modifier: Modifier = Modifier) {
     val textColor = when (tag) {
         "新增" -> if (isDark) Color(0xFFACD3B6) else Color(0xFF386B49)
         "优化" -> if (isDark) Color(0xFFADC7EF) else Color(0xFF3C5E8E)
+        "重构" -> if (isDark) Color(0xFF9FDCD6) else Color(0xFF2E7A72)
         "修复" -> if (isDark) Color(0xFFF3B9BA) else Color(0xFF904A4A)
         "调整" -> if (isDark) Color(0xFFDBBFFE) else Color(0xFF6B4EA2)
         "补充" -> if (isDark) Color(0xFFF3C497) else Color(0xFF825525)
