@@ -2,6 +2,7 @@ package com.hydrogen.screentester.lite
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import android.view.HapticFeedbackConstants
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -14,6 +15,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -33,6 +35,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -59,206 +62,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
-@Composable
-fun ColorPickerSection(
-    showTopDivider: Boolean = true,
-    onThicknessChange: ((Float) -> Unit)? = null,
-    onSegmentLengthChange: ((Float) -> Unit)? = null,
-    onDraggingChange: ((Boolean) -> Unit)? = null
-) {
-    val context = LocalContext.current
-    val view = LocalView.current
-    val focusManager = LocalFocusManager.current
-    val scope = rememberCoroutineScope()
-    val thicknessAnim = remember { Animatable(ThemeSettings.testLineThickness) }
-
-    // 线条粗细的状态管理
-    var thicknessInput by remember { mutableStateOf(String.format(Locale.US, "%.1f", ThemeSettings.testLineThickness)) }
-    var isThicknessFocused by remember { mutableStateOf(false) }
-    LaunchedEffect(thicknessAnim.value) {
-        if (!isThicknessFocused) {
-            thicknessInput = String.format(Locale.US, "%.1f", thicknessAnim.value)
-        }
-        ThemeSettings.saveLineThickness(context, thicknessAnim.value)
-        onThicknessChange?.invoke(thicknessAnim.value)
-    }
-
-    val initialColor = Color(ThemeSettings.testLineColor)
-    val redAnim = remember { Animatable(initialColor.red) }
-    val greenAnim = remember { Animatable(initialColor.green) }
-    val blueAnim = remember { Animatable(initialColor.blue) }
-
-    val currentColorArgb = android.graphics.Color.rgb((redAnim.value * 255).toInt(), (greenAnim.value * 255).toInt(), (blueAnim.value * 255).toInt())
-    var instantTargetColor by remember { mutableStateOf<Int?>(null) }
-    val effectiveArgb = instantTargetColor ?: currentColorArgb
-
-    val hexS = String.format(Locale.US, "#%02X%02X%02X", (redAnim.value * 255).toInt(), (greenAnim.value * 255).toInt(), (blueAnim.value * 255).toInt())
-    var hexText by remember { mutableStateOf(hexS) }
-    var isHexFocused by remember { mutableStateOf(false) }
-
-    LaunchedEffect(redAnim.value, greenAnim.value, blueAnim.value) {
-        if (!isHexFocused) hexText = hexS
-        ThemeSettings.saveLineColor(context, currentColorArgb)
-    }
-
-    // 合并并去重预设颜色
-    val defaultPresets = listOf(Color.White, Color(0xFF72A7FF), MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.error)
-    val allPresets = ThemeSettings.userPresets.map { Color(it) }
-
-    val isCurrentInPresets = allPresets.any { it.toArgb() == effectiveArgb }
-    var isPresetsExpanded by remember { mutableStateOf(false) }
-
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-        if (showTopDivider) {
-            HorizontalDivider(Modifier.padding(bottom = 16.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-        }
-        // 粗细调节区
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("线条粗细", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            // 重置按钮
-            IconButton(
-                onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    thicknessInput = "5.0"
-                    scope.launch {
-                        thicknessAnim.animateTo(
-                            targetValue = 5f,
-                            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
-                        )
-                    }
-                },
-                modifier = Modifier.size(30.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "重置",
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                )
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // 数值编辑框
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
-            ) {
-                BasicTextField(
-                    value = thicknessInput,
-                    onValueChange = { newVal ->
-                        // 限制长度，防止输入过长
-                        if (newVal.length <= 4) {
-                            // 只有当输入为空，或者是合法数字时才处理
-                            val num = newVal.toFloatOrNull()
-                            if (num != null) {
-                                when {
-                                    num > 15f -> {
-                                        // 如果输入的数大于 15
-                                        thicknessInput = "15"
-                                        scope.launch { thicknessAnim.animateTo(15f, tween(400)) }
-                                    }
-                                    num < 1f -> {
-                                        // 下限 1px
-                                        thicknessInput = "1"
-                                        scope.launch { thicknessAnim.animateTo(1f, tween(400)) }
-                                    }
-                                    else -> {
-                                        // 正常范围：1-15 之间
-                                        thicknessInput = newVal
-                                        scope.launch { thicknessAnim.animateTo(num, tween(400)) }
-                                    }
-                                }
-                            } else if (newVal.isEmpty()) {
-                                // 允许删空
-                                thicknessInput = ""
-                            }
-                        }
-                    },
-                    modifier = Modifier
-                        .width(IntrinsicSize.Min)
-                        .widthIn(min = 35.dp)
-                        .onFocusChanged { isThicknessFocused = it.isFocused },
-                    textStyle = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary)
-                )
-                Text("px", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 2.dp))
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        HapticSlider(
-            l = "",
-            c = MaterialTheme.colorScheme.primary,
-            v = (thicknessAnim.value - 1f) / 14f,
-            onDragStart = { onDraggingChange?.invoke(true) },
-            onDragEnd = { onDraggingChange?.invoke(false) }
-        ) {
-            focusManager.clearFocus()
-            val newValue = it * 14f + 1f
-            scope.launch { thicknessAnim.snapTo(newValue) }
-            onThicknessChange?.invoke(newValue)
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        // 渐变色条开关
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("渐变色条", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
-                Text("开启后可选择多种颜色渐变线条", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(
-                checked = ThemeSettings.isMultiColorMode,
-                onCheckedChange = { enabled ->
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    ThemeSettings.saveMultiColorMode(context, enabled)
-                    // 开启时如果没有选中颜色，默认选中彩虹色预设
-                    if (enabled && ThemeSettings.multiColorSelectedColors.isEmpty()) {
-                        ThemeSettings.applyPresetScheme(context, PresetScheme.RAINBOW)
-                    }
-                }
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // 单色模式面板
-        AnimatedVisibility(visible = !ThemeSettings.isMultiColorMode) {
-            SingleColorModePanel(
-                redAnim = redAnim,
-                greenAnim = greenAnim,
-                blueAnim = blueAnim,
-                currentColorArgb = currentColorArgb,
-                instantTargetColor = instantTargetColor,
-                effectiveArgb = effectiveArgb,
-                hexText = hexText,
-                isHexFocused = isHexFocused,
-                onHexChange = { hexText = it },
-                onHexFocusChange = { isHexFocused = it },
-                onInstantColorChange = { instantTargetColor = it },
-                allPresets = allPresets,
-                defaultPresets = defaultPresets,
-                isCurrentInPresets = isCurrentInPresets,
-                isPresetsExpanded = isPresetsExpanded,
-                onPresetsExpandedChange = { isPresetsExpanded = it }
-            )
-        }
-
-        // 渐变色条面板
-        AnimatedVisibility(visible = ThemeSettings.isMultiColorMode) {
-            MultiColorModePanel(onSegmentLengthChange = onSegmentLengthChange, onDraggingChange = onDraggingChange)
-        }
-    }
-}
 
 // RGB 三色滑块
 @Composable
@@ -296,7 +99,12 @@ fun SingleColorModePanel(
     defaultPresets: List<Color>,
     isCurrentInPresets: Boolean,
     isPresetsExpanded: Boolean,
-    onPresetsExpandedChange: (Boolean) -> Unit
+    onPresetsExpandedChange: (Boolean) -> Unit,
+    // 保存/删除预设的目标：不传则默认操作线条色的 userPresets
+    onSavePreset: ((Int) -> Unit)? = null,
+    onRemovePreset: ((Int) -> Unit)? = null,
+    // 不允许选择的颜色（如线条面板要避开背景色）：该预设变灰、点击时提示，不会切换
+    blockedColor: Int? = null
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -346,11 +154,15 @@ fun SingleColorModePanel(
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                modifier = Modifier.clickable {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    ThemeSettings.addUserPreset(context, currentColorArgb)
-                    onInstantColorChange(currentColorArgb)
-                }
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        // 保存目标可由调用方指定（默认：线条色的预设）
+                        if (onSavePreset != null) onSavePreset(currentColorArgb)
+                        else ThemeSettings.addUserPreset(context, currentColorArgb)
+                        onInstantColorChange(currentColorArgb)
+                    }
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
                     Icon(Icons.Default.Add, null, Modifier.size(16.dp), MaterialTheme.colorScheme.primary)
@@ -363,7 +175,8 @@ fun SingleColorModePanel(
 
     Spacer(Modifier.height(16.dp))
 
-    val maxCollapsedCount = 12
+    // 折叠阈值：4 行（6 个一行 × 4）= 24，超出才显示「展开全部」
+    val maxCollapsedCount = 24
     val visiblePresets = if (isPresetsExpanded) allPresets else allPresets.take(maxCollapsedCount)
     val chunkedRows = visiblePresets.chunked(6)
 
@@ -373,28 +186,37 @@ fun SingleColorModePanel(
             Row(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.Start) {
                 for (colIndex in rowColors.indices) {
                     val preset = rowColors[colIndex]
-                    val isSelected = effectiveArgb == preset.toArgb()
+                    val presetArgb = preset.toArgb()
+                    val isSelected = effectiveArgb == presetArgb
                     val isDefault = defaultPresets.contains(preset)
+                    val isBlocked = blockedColor != null && presetArgb == blockedColor
 
                     Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                         PresetColorCircle(
                             preset = preset,
                             isSelected = isSelected,
                             isDefault = isDefault,
+                            isDisabled = isBlocked,
                             onClick = {
-                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                focusManager.clearFocus()
-                                onInstantColorChange(preset.toArgb())
+                                if (isBlocked) {
+                                    Toast.makeText(context, "该颜色与背景相同，如需使用该线条颜色请先更换背景颜色", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    focusManager.clearFocus()
+                                    onInstantColorChange(presetArgb)
 
-                                val spec = tween<Float>(800, easing = FastOutSlowInEasing)
-                                scope.launch { redAnim.animateTo(preset.red, spec) }
-                                scope.launch { greenAnim.animateTo(preset.green, spec) }
-                                scope.launch { blueAnim.animateTo(preset.blue, spec) }
+                                    val spec = tween<Float>(800, easing = FastOutSlowInEasing)
+                                    scope.launch { redAnim.animateTo(preset.red, spec) }
+                                    scope.launch { greenAnim.animateTo(preset.green, spec) }
+                                    scope.launch { blueAnim.animateTo(preset.blue, spec) }
+                                }
                             },
                             onLongClick = {
                                 if (!isDefault) {
                                     view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                    ThemeSettings.removeUserPreset(context, preset.toArgb())
+                                    // 删除目标可由调用方指定（默认：线条色的预设）
+                                    if (onRemovePreset != null) onRemovePreset(preset.toArgb())
+                                    else ThemeSettings.removeUserPreset(context, preset.toArgb())
                                 }
                             }
                         )
@@ -880,22 +702,48 @@ fun MultiColorModePanel(
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun PresetColorCircle(preset: Color, isSelected: Boolean, isDefault: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+fun PresetColorCircle(
+    preset: Color, isSelected: Boolean, isDefault: Boolean,
+    /** 不允许选择的颜色（如线条要避开背景色）：颜色照原样显示，上面加一道斜杠 */
+    isDisabled: Boolean = false,
+    onClick: () -> Unit, onLongClick: () -> Unit
+) {
     val ckScale by animateFloatAsState(if (isSelected) 1f else 0f, spring(dampingRatio = 0.6f), label = "")
+    // 对比色（按圆点亮度取黑/白）：斜杠与禁用圈共用
+    val contrastColor = if ((preset.red*0.299 + preset.green*0.587 + preset.blue*0.114) > 0.5) Color.Black else Color.White
+    val outlineWidth = when {
+        isSelected -> 3.dp
+        isDisabled -> 2.dp
+        else -> 1.dp
+    }
+    val outlineColor = when {
+        isSelected -> MaterialTheme.colorScheme.onSurface
+        isDisabled -> contrastColor.copy(alpha = 0.72f)
+        else -> Color.Gray.copy(0.3f)
+    }
     Box(
         modifier = Modifier.size(38.dp).clip(CircleShape).background(preset)
-            .border(width = if (isSelected) 3.dp else 1.dp, color = if (isSelected) MaterialTheme.colorScheme.onSurface else Color.Gray.copy(0.3f), shape = CircleShape)
+            .border(width = outlineWidth, color = outlineColor, shape = CircleShape)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
             ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = Icons.Default.Check, null,
-            modifier = Modifier.size(24.dp).graphicsLayer { scaleX = ckScale; scaleY = ckScale; alpha = ckScale },
-            tint = if ((preset.red*0.299 + preset.green*0.587 + preset.blue*0.114) > 0.5) Color.Black else Color.White
-        )
+        if (isDisabled) {
+            Box(
+                modifier = Modifier
+                    .size(width = 46.dp, height = 3.dp)
+                    .rotate(-45f)
+                    .background(contrastColor.copy(alpha = 0.72f), RoundedCornerShape(1.5.dp))
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Check, null,
+                modifier = Modifier.size(24.dp).graphicsLayer { scaleX = ckScale; scaleY = ckScale; alpha = ckScale },
+                tint = contrastColor
+            )
+        }
     }
 }
 
@@ -906,12 +754,12 @@ fun SettingsPage() {
     val view = LocalView.current
     val density = LocalDensity.current
 
-    var isAppExp by remember { mutableStateOf(false) }
-    var isBrightExp by remember { mutableStateOf(false) }
-    var isBlackBorderTestExp by remember { mutableStateOf(false) }
+    var isAppExp by rememberSaveable { mutableStateOf(false) }
+    var isBrightExp by rememberSaveable { mutableStateOf(false) }
+    var isBlackBorderTestExp by rememberSaveable { mutableStateOf(false) }
     var showPureModeHelp by remember { mutableStateOf(false) }
-    var isColorExp by remember { mutableStateOf(false) }
-    var isAnimExp by remember { mutableStateOf(false) }
+    var isColorExp by rememberSaveable { mutableStateOf(false) }
+    var isAnimExp by rememberSaveable { mutableStateOf(false) }
 
     // 实时线条预览
     var previewVisible by remember { mutableStateOf(false) }
@@ -1017,22 +865,29 @@ fun SettingsPage() {
 
     val backgroundColor = MaterialTheme.colorScheme.background
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // Tab 可见性检测放在满宽 Box 上：内容限宽后列表不再横跨整屏，位置判断会失真
+            .onGloballyPositioned { coords ->
+                val currentX = coords.positionInWindow().x
+                if (currentX != lastX) {
+                    val isVisibleNow = currentX > -screenWidthPx / 2 && currentX < screenWidthPx / 2
+                    if (isVisibleNow && !wasVisible) {
+                        animationTrigger++
+                    }
+                    wasVisible = isVisibleNow
+                    lastX = currentX
+                }
+            }
+    ) {
         LazyColumn(
             modifier = Modifier
-                .fillMaxSize()
+                .align(Alignment.TopCenter)
+                .fillMaxHeight()
+                // 大屏适配：内容限宽居中
+                .widthIn(max = DeviceUtils.FormMaxWidth)
                 .padding(horizontal = 24.dp)
-                .onGloballyPositioned { coords ->
-                    val currentX = coords.positionInWindow().x
-                    if (currentX != lastX) {
-                        val isVisibleNow = currentX > -screenWidthPx / 2 && currentX < screenWidthPx / 2
-                        if (isVisibleNow && !wasVisible) {
-                            animationTrigger++
-                        }
-                        wasVisible = isVisibleNow
-                        lastX = currentX
-                    }
-                }
         ) {
             item { Spacer(Modifier.statusBarsPadding()); Spacer(modifier = Modifier.height(80.dp)) }
             item { Text(text = "设置", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black); Spacer(modifier = Modifier.height(24.dp)) }
@@ -1412,7 +1267,19 @@ fun SettingsPage() {
                                 modifier = Modifier.graphicsLayer { rotationZ = colorArrowRotation }
                             )
                         }
-                        AnimatedVisibility(visible = isColorExp) { ColorPickerSection(onThicknessChange = { realtimeThickness = it }, onSegmentLengthChange = { realtimeSegmentLength = it }, onDraggingChange = { isDragging = it }) }
+                        AnimatedVisibility(visible = isColorExp) {
+                            Column {
+                                TestLineSettingsPanel(
+                                    onThicknessChange = { realtimeThickness = it },
+                                    onSegmentLengthChange = { realtimeSegmentLength = it },
+                                    onDraggingChange = { isDragging = it }
+                                )
+                                // 进入「线条与配色」页（可调线条/背景/字体，并实时预览）
+                                MoreSettingsEntry(
+                                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 16.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1477,6 +1344,21 @@ fun SettingsPage() {
                                         }
                                     )
                                 }
+
+                                Spacer(Modifier.height(20.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("背景动态混色", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                        Text(text = "关于页背景缓慢流动混色", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Switch(
+                                        checked = ThemeSettings.aboutDynamicMixEnabled,
+                                        onCheckedChange = {
+                                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                            ThemeSettings.saveAboutDynamicMixConfig(context, it)
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -1485,7 +1367,7 @@ fun SettingsPage() {
 
             // 下载与更新
             item {
-                var isDownloadExp by remember { mutableStateOf(false) }
+                var isDownloadExp by rememberSaveable { mutableStateOf(false) }
                 val downloadArrowRotation by animateFloatAsState(targetValue = if (isDownloadExp) 180f else 0f, label = "downloadArrow")
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp).graphicsLayer { this.alpha = cardAlphas[5].value; this.translationY = cardOffsetsY[5].value },
@@ -1524,22 +1406,15 @@ fun SettingsPage() {
 
                                 Text("更新下载源", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                                 Spacer(Modifier.height(10.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    listOf("gitee" to "Gitee", "github" to "GitHub").forEach { (source, label) ->
-                                        val isSelected = ThemeSettings.updateDownloadSource == source
-                                        val containerColor by animateColorAsState(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), tween(250), label = "dlColor")
-                                        val contentColor by animateColorAsState(if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface, tween(250), label = "dlText")
-                                        Card(
-                                            modifier = Modifier.weight(1f).clip(g2LargeShape).clickable {
-                                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); ThemeSettings.saveUpdateSource(context, source)
-                                            },
-                                            shape = g2LargeShape,
-                                            colors = CardDefaults.cardColors(containerColor = containerColor)
-                                        ) {
-                                            Text(text = label, modifier = Modifier.padding(vertical = 14.dp).fillMaxWidth(), fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = contentColor, textAlign = TextAlign.Center, style = MaterialTheme.typography.labelMedium)
-                                        }
+                                // 指示块可滑动、松手弹簧吸附
+                                SegmentedSlideSelector(
+                                    items = listOf("gitee" to "Gitee", "github" to "GitHub"),
+                                    selected = ThemeSettings.updateDownloadSource,
+                                    onSelect = { source ->
+                                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                        ThemeSettings.saveUpdateSource(context, source)
                                     }
-                                }
+                                )
                             }
                         }
                     }

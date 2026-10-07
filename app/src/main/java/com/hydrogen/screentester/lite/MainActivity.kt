@@ -219,7 +219,7 @@ fun MainContainer() {
             when (pageIndex) {
                 0 -> HomePage()
                 1 -> SettingsPage()
-                2 -> AboutPage()
+                2 -> AboutPage(pageVisible = pagerState.currentPage == 2)
             }
         }
 
@@ -256,7 +256,8 @@ fun AnimatedScrubbingNavBar(
 ) {
     val items = listOf("主页" to Icons.Default.Home, "设置" to Icons.Default.Settings, "关于" to Icons.Default.Info)
     val configuration = LocalConfiguration.current
-    val navBarWidth = minOf(configuration.screenWidthDp.dp * 0.85f, 340.dp)
+    // 大屏上限：不加限制的话在平板上会变成一条横跨整屏的超长条。
+    val navBarWidth = minOf(configuration.screenWidthDp.dp * 0.85f, DeviceUtils.NavBarMaxWidth)
     val tabWidth = navBarWidth / items.size
     val density = LocalDensity.current.density
 

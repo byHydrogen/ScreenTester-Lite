@@ -28,6 +28,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -67,6 +68,10 @@ fun DonateScreen(isDark: Boolean, onBack: () -> Unit) {
     val view = LocalView.current
     val context = LocalContext.current
     val backgroundBrush = DeviceUtils.backgroundBrush(isDark)
+
+    // 横屏两栏：左图标、右卡片
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
     val cardShape = G2Shapes.aboutCard
     var showSaveDialog by remember { mutableStateOf(false) }
 
@@ -113,51 +118,46 @@ fun DonateScreen(isDark: Boolean, onBack: () -> Unit) {
         )
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(backgroundBrush)) {
-        Scaffold(
-            topBar = {
-                val startColor = DeviceUtils.backgroundBaseColor(isDark)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    startColor,
-                                    startColor.copy(alpha = 0.95f),
-                                    startColor.copy(alpha = 0.60f),
-                                    startColor.copy(alpha = 0.20f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
-                        .padding(bottom = 28.dp)
-                ) {
-                    TopAppBar(
-                        title = { Text("赞赏", fontWeight = FontWeight.Black) },
-                        navigationIcon = {
-                            IconButton(onClick = {
-                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                onBack()
-                            }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                    )
-                }
-            },
-            containerColor = Color.Transparent
-        ) { innerPadding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Spacer(modifier = Modifier.height(innerPadding.calculateTopPadding() + 20.dp))
+    Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
+        // 背景层：动态混色（跟随全局开关）或原静态渐变
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (ThemeSettings.aboutDynamicMixEnabled) Modifier.dynamicMixBackground(isDark, running = true)
+                    else Modifier.background(backgroundBrush)
+                )
+        )
 
+        // 竖屏单列滚动 + 限宽；横屏两栏
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .align(Alignment.TopCenter)
+                // 开混色时顶栏透明，用内容渐隐代替铺色
+                .then(
+                    if (ThemeSettings.aboutDynamicMixEnabled) {
+                        Modifier.fadeOutAtTop(
+                            WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 96.dp
+                        )
+                    } else Modifier
+                )
+                .then(
+                    if (!isLandscape) Modifier
+                        .padding(horizontal = 32.dp)
+                        .widthIn(max = DeviceUtils.NavBarMaxWidth)
+                        .verticalScroll(rememberScrollState())
+                    else Modifier
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 顶部留白仅竖屏需要
+            if (!isLandscape) {
+                Spacer(modifier = Modifier.height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 96.dp))
+            }
+
+            // 头部抽成 lambda：横屏进左栏，竖屏在流内
+            val headerBlock: @Composable () -> Unit = {
                 // 咖啡图标
                 Box(
                     modifier = Modifier
@@ -199,10 +199,10 @@ fun DonateScreen(isDark: Boolean, onBack: () -> Unit) {
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
 
-                Spacer(modifier = Modifier.height(40.dp))
-
-                // 赞赏二维码卡片
+            // 赞赏二维码卡片
+            val bodyBlock: @Composable () -> Unit = {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = cardShape,
@@ -253,9 +253,75 @@ fun DonateScreen(isDark: Boolean, onBack: () -> Unit) {
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(innerPadding.calculateBottomPadding() + 32.dp))
             }
+
+            if (isLandscape) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(start = (configuration.screenWidthDp - 64).dp * 0.5f),
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Spacer(modifier = Modifier.height(48.dp))
+                        // 卡片限宽 420
+                        Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                            bodyBlock()
+                        }
+                        Spacer(modifier = Modifier.height(WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 32.dp))
+                    }
+                    Box(
+                        modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // 必须包一层 Column：直接放进 Box 会重叠
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) { headerBlock() }
+                    }
+                }
+            } else {
+                headerBlock()
+                Spacer(modifier = Modifier.height(40.dp))
+                bodyBlock()
+                Spacer(modifier = Modifier.height(WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 32.dp))
+            }
+        }
+
+        // 顶栏 overlay：动态混色开启时完全透明（不压流动背景），关闭时保持原同色渐变
+        val topBarBaseColor = DeviceUtils.backgroundBaseColor(isDark)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .then(
+                    if (ThemeSettings.aboutDynamicMixEnabled) Modifier
+                    else Modifier.background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                topBarBaseColor,
+                                topBarBaseColor.copy(alpha = 0.95f),
+                                topBarBaseColor.copy(alpha = 0.60f),
+                                topBarBaseColor.copy(alpha = 0.20f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+                )
+                .padding(bottom = 28.dp)
+        ) {
+            TopAppBar(
+                title = { Text("赞赏", fontWeight = FontWeight.Black) },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        onBack()
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+            )
         }
     }
 }

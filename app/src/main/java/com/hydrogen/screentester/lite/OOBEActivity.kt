@@ -1,15 +1,11 @@
 package com.hydrogen.screentester.lite
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.HapticFeedbackConstants
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
@@ -22,6 +18,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -31,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -38,7 +36,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -47,12 +44,15 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.hydrogen.screentester.lite.ui.theme.ScreenTesterTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 import androidx.core.view.WindowCompat
@@ -125,54 +125,13 @@ class OOBEActivity : ComponentActivity() {
 @Composable
 fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
     val scope = rememberCoroutineScope()
-    val pagerState = rememberPagerState(pageCount = { 7 })
+    val pagerState = rememberPagerState(pageCount = { 6 })
     val view = LocalView.current
     val context = LocalContext.current
 
     val focusManager = LocalFocusManager.current
 
     var isCalibrating by remember { mutableStateOf(ThemeSettings.useCustomRadius) }
-
-    // 更新检测状态
-    var updateHasUpdate by remember { mutableStateOf(false) }
-    var updateVersionName by remember { mutableStateOf("") }
-    var updateChangelog by remember { mutableStateOf("") }
-    var updateDownloadUrl by remember { mutableStateOf<String?>(null) }
-    var updateChecking by remember { mutableStateOf(true) }
-    var updateError by remember { mutableStateOf(false) }
-    var showDownloadLinkDialog by remember { mutableStateOf(false) }
-    var showDownloadConfirm by remember { mutableStateOf(false) }
-    val downloadState = GlobalUpdateState.downloadState
-    DownloadProgressPoller(downloadState)
-
-    val notifPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        downloadState.start(context, updateDownloadUrl ?: UpdateManager.releasePageUrl(), "ScreenTester_Lite_$updateVersionName.apk")
-    }
-    fun startDownloadWithPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS); return
-        }
-        downloadState.start(context, updateDownloadUrl ?: UpdateManager.releasePageUrl(), "ScreenTester_Lite_$updateVersionName.apk")
-    }
-
-    val doUpdateCheck: () -> Unit = {
-        updateChecking = true
-        updateError = false
-        UpdateManager.checkUpdate(
-            context = context,
-            onResult = { has, version, log, downloadUrl ->
-                updateHasUpdate = has
-                updateVersionName = version ?: ""
-                updateChangelog = log ?: ""
-                updateDownloadUrl = downloadUrl
-                updateChecking = false
-            },
-            onError = {
-                updateChecking = false
-                updateError = true
-            }
-        )
-    }
 
     // 教程状态
     val tutorialTargets = remember { mutableStateMapOf<Int, Rect>() }
@@ -191,12 +150,116 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
     val calibBLY = remember { Animatable(calibPrefs.getFloat("r_bl_y", 0f)) }
     val calibBRY = remember { Animatable(calibPrefs.getFloat("r_br_y", 0f)) }
 
-    LaunchedEffect(Unit) { doUpdateCheck() }
+    val localDensity = LocalDensity.current
+    val systemRadius = try {
+        val insets = (context as? android.app.Activity)?.window?.decorView?.rootWindowInsets
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            insets?.getRoundedCorner(android.view.RoundedCorner.POSITION_TOP_LEFT)?.radius?.toFloat() ?: 100f
+        } else { 100f }
+    } catch (_: Exception) { 100f }
+
+    // 基础圆角半径 Animatable 提升到根部：拖拽覆盖层的 radiusSet 与联动切换动画都要用
+    val calibTL = remember { Animatable(if (ThemeSettings.radiusTL < 0f) systemRadius else ThemeSettings.radiusTL) }
+    val calibTR = remember { Animatable(if (ThemeSettings.radiusTR < 0f) systemRadius else ThemeSettings.radiusTR) }
+    val calibBL = remember { Animatable(if (ThemeSettings.radiusBL < 0f) systemRadius else ThemeSettings.radiusBL) }
+    val calibBR = remember { Animatable(if (ThemeSettings.radiusBR < 0f) systemRadius else ThemeSettings.radiusBR) }
+    // 联动模式沿用已保存的值，与校准车间同一份（旧用户切过四角独立，这里进来也是四角独立）
+    var isLinked by remember { mutableStateOf(ThemeSettings.isCalibrationLinked) }
+    val calibSliderSpec = tween<Float>(800, easing = FastOutSlowInEasing)
+
+    // 切回全局同步时把其余三角对齐到左上角（控制行与教程都会调，定义成一处）
+    val setLinkedMode: (Boolean) -> Unit = { newLinked ->
+        if (newLinked != isLinked) {
+            val wasLinked = isLinked
+            isLinked = newLinked
+            if (newLinked && !wasLinked) {
+                scope.launch { calibTR.animateTo(calibTL.value, calibSliderSpec) }
+                scope.launch { calibBL.animateTo(calibTL.value, calibSliderSpec) }
+                scope.launch { calibBR.animateTo(calibTL.value, calibSliderSpec) }
+                scope.launch { calibTRX.animateTo(calibTLX.value, calibSliderSpec) }
+                scope.launch { calibBLX.animateTo(calibTLX.value, calibSliderSpec) }
+                scope.launch { calibBRX.animateTo(calibTLX.value, calibSliderSpec) }
+                scope.launch { calibTRY.animateTo(calibTLY.value, calibSliderSpec) }
+                scope.launch { calibBLY.animateTo(calibTLY.value, calibSliderSpec) }
+                scope.launch { calibBRY.animateTo(calibTLY.value, calibSliderSpec) }
+            }
+        }
+    }
+
+    val radiusSet = remember {
+        CornerRadiusSet(
+            calibTL, calibTR, calibBL, calibBR,
+            calibTLX, calibTRX, calibBLX, calibBRX,
+            calibTLY, calibTRY, calibBLY, calibBRY
+        )
+    }
+
+    // 拖拽调整：只在本次 OOBE 内临时生效，不写入 settings。进入时留快照供 × 回滚
+    var dragAdjustMode by remember { mutableStateOf(false) }
+    var dragUserDragging by remember { mutableStateOf(false) }
+    var dragSnapshot by remember { mutableStateOf<CornerRadiusSnapshot?>(null) }
+    var dragTutorialActive by remember { mutableStateOf(false) }
+    var dragTutorialStep by remember { mutableIntStateOf(0) }
+
+    val enterDragMode: () -> Unit = {
+        focusManager.clearFocus()
+        dragSnapshot = radiusSet.snapshot()
+        dragAdjustMode = true
+        dragUserDragging = false
+        // 首次进入拖拽时补一次拖拽教程
+        if (!tutorialActive && !isDragTutorialShown(context)) {
+            dragTutorialStep = 0
+            dragTutorialActive = true
+        }
+    }
+
+    // rollback = true 回滚到进入时的快照（× 与返回键），false 保留本次调整（✓）
+    val exitDragMode: (Boolean) -> Unit = { rollback ->
+        if (rollback) {
+            dragSnapshot?.let {
+                radiusSet.restore(scope, it, tween<Float>(400, easing = FastOutSlowInEasing))
+            }
+        }
+        dragSnapshot = null
+        dragAdjustMode = false
+        dragUserDragging = false
+        dragTutorialActive = false
+    }
+
+    // 页内与根部两个实例共用同一份回调
+    val onToggleG2Mode: () -> Unit = {
+        val next = !isG2Enabled
+        isG2Enabled = next
+        // 注意必须调用 Editor 的 apply() 提交，只写进 Editor 是不落盘的
+        calibPrefs.edit().putBoolean("is_g2_enabled", next).apply()
+    }
+    val toggleDragMode: () -> Unit = {
+        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (dragAdjustMode) exitDragMode(false) else enterDragMode()
+    }
+    // 用户手动切换联动模式时才落盘；教程里强制的「全局同步」不落盘
+    val toggleLinkedMode: () -> Unit = {
+        val next = !isLinked
+        setLinkedMode(next)
+        ThemeSettings.saveCalibrationLinkedMode(context, next)
+    }
+
+    // 拖拽模式下返回键只退出拖拽，语义等同 ✓（保留改动，避免误按丢数据）
+    BackHandler(enabled = dragAdjustMode) { exitDragMode(false) }
+
+    // 普通教程期间强制回到普通界面，与校准车间一致
+    LaunchedEffect(tutorialActive, tutorialStep) {
+        if (tutorialActive && dragAdjustMode) exitDragMode(false)
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        if (pagerState.currentPage != 1 && dragAdjustMode) exitDragMode(false)
+    }
 
     LaunchedEffect(pagerState.currentPage) {
         OOBEState.currentStep = pagerState.currentPage
         // 首次切换到圆角校准页时自动弹出教程
-        if (pagerState.currentPage == 2 && !isTutorialShown(context) && !tutorialActive) {
+        if (pagerState.currentPage == 1 && !isTutorialShown(context) && !tutorialActive) {
             tutorialStep = 0
             tutorialActive = true
         }
@@ -212,13 +275,13 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
 
     // 校准模式背景渐变动画
     val whiteOverlayAlpha by animateFloatAsState(
-        targetValue = if (isCalibrating && pagerState.currentPage == 2) 1f else 0f,
+        targetValue = if (isCalibrating && pagerState.currentPage == 1) 1f else 0f,
         animationSpec = tween(500),
         label = "whiteOverlay"
     )
 
     // 底部导航浅色主题混合
-    val isLightMode = isCalibrating && pagerState.currentPage == 2
+    val isLightMode = isCalibrating && pagerState.currentPage == 1
     val oobeLightScheme = remember {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             dynamicLightColorScheme(context)
@@ -244,7 +307,7 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
     )
 
     val skipAlpha by animateFloatAsState(
-        targetValue = if (pagerState.currentPage in 1..6) 1f else 0f,
+        targetValue = if (pagerState.currentPage in 1..5) 1f else 0f,
         animationSpec = tween(300),
         label = "skipAlpha"
     )
@@ -268,14 +331,46 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
     var realtimeSegmentLength by remember { mutableFloatStateOf(if (ThemeSettings.multiColorSegmentLength == 0f) 1f else ThemeSettings.multiColorSegmentLength) }
     var isDragging by remember { mutableStateOf(false) }
 
+    // 底栏遮罩显隐：仅当内容实际延伸到悬浮底栏之下时显示（由各滚动步骤上报）
+    var navMaskVisible by remember { mutableStateOf(false) }
+    val navMaskAlpha by animateFloatAsState(
+        targetValue = if (navMaskVisible) 1f else 0f,
+        animationSpec = tween(400),
+        label = "navMaskAlpha"
+    )
+
+    // 动态混色：圆角校准(步骤1)与测试线条(步骤2)对显示精度敏感，浅色模式下淡出静态背景
+    val sensitiveStep = pagerState.currentPage == 1 || pagerState.currentPage == 2
+    val mixVisible = ThemeSettings.aboutDynamicMixEnabled && !(sensitiveStep && !isDark)
+    val mixAlpha by animateFloatAsState(
+        targetValue = if (mixVisible) 1f else 0f,
+        animationSpec = tween(600),
+        label = "oobeMixAlpha"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(backgroundBrush)
+            // clipToBounds：混色光斑绘制半径大于页面，需裁剪在自身范围内
+            .clipToBounds()
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { focusManager.clearFocus() })
             }
     ) {
+        // 静态背景层（常驻，兼作混色关闭/淡出时的背景）
+        Box(modifier = Modifier.fillMaxSize().background(backgroundBrush))
+
+        // 动态混色层：混色开启时叠在静态层上，随 mixAlpha 渐显/渐隐；
+        // 淡出未结束前保留图层，开关切换才有渐变过渡（否则会瞬间消失/出现）
+        if (ThemeSettings.aboutDynamicMixEnabled || mixAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = mixAlpha }
+                    .dynamicMixBackground(isDark, running = !sensitiveStep)
+            )
+        }
+
         // 校准模式浅灰色背景叠加层
         if (whiteOverlayAlpha > 0f) {
             Box(
@@ -285,121 +380,125 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
             )
         }
 
-        // 层级 1：基础内容层
-        Column(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.weight(1f),
-                beyondViewportPageCount = 6,
-                userScrollEnabled = false
-            ) { pageIndex ->
+        // 层级 1：页面内容占满全屏（悬浮底栏下方可滚过内容）
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+            beyondViewportPageCount = 5,
+            userScrollEnabled = false
+        ) { pageIndex ->
                 when (pageIndex) {
-                    0 -> OOBEWelcomeStep(isDark)
-                    1 -> OOBEUpdateStep(
-                        isDark = isDark,
-                        isActive = pagerState.currentPage == 1,
-                        hasUpdate = updateHasUpdate,
-                        versionName = updateVersionName,
-                        changelog = updateChangelog,
-                        isChecking = updateChecking,
-                        isError = updateError,
-                        onNext = { scope.launch { pagerState.animateScrollToPage(2) } },
-                        onRetry = { doUpdateCheck() }
-                    )
-                    2 -> OOBECornerCalibrationStep(
+                    0 -> OOBEWelcomeStep(isDark, isVisible = pagerState.currentPage == 0, onContentUnderBar = { navMaskVisible = it })
+                    1 -> OOBECornerCalibrationStep(
                         isDark,
+                        isVisible = pagerState.currentPage == 1,
                         onCalibrationChanged = { isCalibrating = it },
                         isG2Enabled = isG2Enabled,
+                        onToggleG2 = onToggleG2Mode,
+                        systemRadius = systemRadius,
+                        isLinked = isLinked,
+                        onLinkedChange = setLinkedMode,
+                        tlAnim = calibTL, trAnim = calibTR, blAnim = calibBL, brAnim = calibBR,
+                        dragAdjustMode = dragAdjustMode,
+                        onToggleDrag = toggleDragMode,
+                        onToggleLinked = toggleLinkedMode,
                         tutorialTargets = tutorialTargets,
                         tutorialActive = tutorialActive,
                         tutorialStep = tutorialStep,
                         onTutorialToggle = { tutorialActive = it },
                         onTutorialStepChange = { tutorialStep = it },
-                        onG2Changed = { isG2Enabled = it },
+                        onContentUnderBar = { navMaskVisible = it },
                         tlXAnim = calibTLX, trXAnim = calibTRX, blXAnim = calibBLX, brXAnim = calibBRX,
                         tlYAnim = calibTLY, trYAnim = calibTRY, blYAnim = calibBLY, brYAnim = calibBRY
                     )
-                    3 -> OOBETestLineStep(isDark,
+                    2 -> OOBETestLineStep(isDark,
+                        isVisible = pagerState.currentPage == 2,
                         onThicknessChange = { realtimeThickness = it },
                         onSegmentLengthChange = { realtimeSegmentLength = it },
-                        onDraggingChange = { isDragging = it }
+                        onDraggingChange = { isDragging = it },
+                        onContentUnderBar = { navMaskVisible = it }
                     )
-                    4 -> OOBEPureModeStep(isDark)
-                    5 -> OOBEAdvancedUIStep(isDark)
-                    6 -> OOBECompletionStep(isDark, isActive = pagerState.currentPage == 6)
+                    3 -> OOBEPureModeStep(isDark, isVisible = pagerState.currentPage == 3, onContentUnderBar = { navMaskVisible = it })
+                    4 -> OOBEAdvancedUIStep(isDark, isVisible = pagerState.currentPage == 4, onContentUnderBar = { navMaskVisible = it })
+                    5 -> OOBECompletionStep(isDark, isActive = pagerState.currentPage == 5, isVisible = pagerState.currentPage == 5, onContentUnderBar = { navMaskVisible = it })
                 }
             }
 
-            // 底部导航区
+            // 悬浮底部导航：按钮位置与原布局一致；上一步与进度指示器加半透明遮罩底，
+            // 内容滚过时保持可读
+            // 拖拽模式下底栏淡出：与「欢迎页→校准页」时底栏元素的显隐同口径（淡入淡出+轻微缩放，无位移）。
+            // 触摸拦截由顶层拖拽覆盖层负责，这里只管视觉。
+            val navBarAnimSpec: AnimationSpec<Float> =
+                if (dragAdjustMode) tween(220, easing = FastOutSlowInEasing)
+                else tween(400, easing = FastOutSlowInEasing)
+            val navBarAlpha by animateFloatAsState(
+                targetValue = if (dragAdjustMode) 0f else 1f,
+                animationSpec = navBarAnimSpec,
+                label = "oobeNavBarAlpha"
+            )
+            val navBarScale by animateFloatAsState(
+                targetValue = if (dragAdjustMode) 0.9f else 1f,
+                animationSpec = navBarAnimSpec,
+                label = "oobeNavBarScale"
+            )
             MaterialTheme(colorScheme = oobeBlendedScheme) {
             Column(
                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp)
-                    .padding(bottom = 48.dp),
+                    .padding(bottom = 48.dp)
+                    .blockTouchesWhile(dragAdjustMode)
+                    .graphicsLayer {
+                        alpha = navBarAlpha
+                        scaleX = navBarScale
+                        scaleY = navBarScale
+                    },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // 按钮行
-                val isDownloadPage = pagerState.currentPage == 1 && updateHasUpdate && !updateChecking
-                // 浏览器下载
-                if (isDownloadPage) {
-                    Box(Modifier.fillMaxWidth().padding(bottom = 4.dp), contentAlignment = Alignment.Center) {
-                        Box(Modifier.clip(G2Shapes.button).clickable { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(UpdateManager.releasePageUrl()))) }.padding(horizontal = 12.dp, vertical = 2.dp)) {
-                            Text("浏览器下载", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                        }
-                    }
-                }
                 Box(modifier = Modifier.fillMaxWidth()) {
-                    // 上一步（左对齐）
-                    Box(modifier = Modifier.align(Alignment.CenterStart).alpha(skipAlpha)) {
-                        if (pagerState.currentPage in 1..6) {
-                            TextButton(
-                                onClick = {
-                                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                    scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
-                                }
-                            ) {
-                                Text("上一步", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                            }
+                    // 上一步（左对齐）：整块（含遮罩）统一淡入淡出；隐藏期间禁点
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .alpha(skipAlpha)
+                            .heightIn(min = 40.dp)
+                            .clip(G2Shapes.button)
+                            .clickable(enabled = pagerState.currentPage in 1..5) {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // 遮罩层：内容滚过底栏时渐显，无内容经过时渐隐（只隐遮罩不隐文字）
+                        if (navMaskVisible || navMaskAlpha > 0f) {
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .graphicsLayer { alpha = navMaskAlpha }
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+                                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), G2Shapes.button)
+                            )
                         }
-                    }
-
-                    // 稍后按钮：下载中淡出，暂停/完成后淡入
-                    val isDownloadActive = isDownloadPage && downloadState.status == DownloadStatus.Downloading
-                    if (isDownloadPage) {
-                        val laterAlpha = remember { Animatable(0f) }
-                        val showLater = !isDownloadActive
-                        LaunchedEffect(showLater) {
-                            if (showLater) laterAlpha.animateTo(1f, tween(300)) else laterAlpha.animateTo(0f, tween(300))
-                        }
-                        Box(modifier = Modifier.align(Alignment.Center).graphicsLayer { alpha = laterAlpha.value }) {
-                            TextButton(
-                                onClick = {
-                                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                    if (downloadState.status == DownloadStatus.Paused) downloadState.cancel(context)
-                                    scope.launch { pagerState.animateScrollToPage(2) }
-                                }
-                            ) {
-                                Text("稍后", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                            }
-                        }
+                        Text(
+                            text = "上一步",
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        )
                     }
 
                     // 主按钮
                     val mainButtonText = when {
-                        isDownloadPage -> "去下载"
                         pagerState.currentPage == 0 -> "开始"
-                        pagerState.currentPage == 6 -> "开始使用"
+                        pagerState.currentPage == 5 -> "开始使用"
                         else -> "下一步"
                     }
                     val mainButtonWidth by animateDpAsState(
                         targetValue = when {
-                            isDownloadActive -> 170.dp
-                            isDownloadPage -> 120.dp
                             pagerState.currentPage == 0 -> 100.dp
-                            pagerState.currentPage == 6 -> 150.dp
+                            pagerState.currentPage == 5 -> 150.dp
                             else -> 120.dp
                         },
                         animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f),
@@ -409,14 +508,7 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                         Button(
                             onClick = {
                                 view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                if (isDownloadPage) {
-                                    when (downloadState.status) {
-                                        DownloadStatus.Idle, DownloadStatus.Error -> { showDownloadConfirm = true }
-                                        DownloadStatus.Downloading -> downloadState.pause()
-                                        DownloadStatus.Paused -> { startDownloadWithPermission() }
-                                        DownloadStatus.Done -> downloadState.install(context, "ScreenTester_Lite_$updateVersionName.apk")
-                                    }
-                                } else if (pagerState.currentPage < 6) {
+                                if (pagerState.currentPage < 5) {
                                     scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
                                 } else {
                                     onComplete()
@@ -426,63 +518,66 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                             shape = G2Shapes.button,
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
-                            AnimatedContent(
-                                targetState = when {
-                                    isDownloadActive -> 1
-                                    isDownloadPage && downloadState.status == DownloadStatus.Paused -> 2
-                                    isDownloadPage && downloadState.status == DownloadStatus.Error -> 3
-                                    isDownloadPage && downloadState.status == DownloadStatus.Done -> 4
-                                    isDownloadPage -> 5
-                                    else -> 0
-                                },
-                                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
-                                label = "oobeMainState"
-                            ) { state ->
-                                when (state) {
-                                    1 -> Row { Text("已下载 ", fontWeight = FontWeight.Bold, fontSize = 15.sp); Text("${(downloadState.progress * 100).toInt()}%", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
-                                    2 -> Text("已暂停", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    3 -> Text("下载失败", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    4 -> Text("安装", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    5 -> Text("去下载", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    else -> Text(mainButtonText, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                }
-                            }
+                            Text(mainButtonText, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // 进度指示器
-                Row(
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier.fillMaxWidth()
+                // 进度指示器：固定高度槽位（欢迎页淡出隐藏，按钮行位置不跳动）
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(34.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    repeat(7) { index ->
-                        val isActive = pagerState.currentPage == index
-                        val width by animateDpAsState(
-                            targetValue = if (isActive) 24.dp else 8.dp,
-                            animationSpec = tween(200),
-                            label = "dotWidth"
-                        )
-                        val alpha by animateFloatAsState(
-                            targetValue = if (isActive) 1f else 0.3f,
-                            animationSpec = tween(200),
-                            label = "dotAlpha"
-                        )
-                        Box(
-                            modifier = Modifier
-                                .padding(horizontal = 4.dp)
-                                .width(width)
-                                .height(8.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = alpha))
-                        )
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = pagerState.currentPage != 0,
+                        enter = fadeIn(tween(200)) + scaleIn(initialScale = 0.8f, animationSpec = tween(200)),
+                        exit = fadeOut(tween(200)) + scaleOut(targetScale = 0.8f, animationSpec = tween(200))
+                    ) {
+                        // 胶囊遮罩底：随内容是否经过底栏渐显/渐隐（只隐遮罩不隐圆点）
+                        Box(modifier = Modifier.clip(CircleShape)) {
+                            if (navMaskVisible || navMaskAlpha > 0f) {
+                                Box(
+                                    modifier = Modifier
+                                        .matchParentSize()
+                                        .graphicsLayer { alpha = navMaskAlpha }
+                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+                                        .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
+                                )
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+                            ) {
+                                // 5 个进度点对应步骤 1-5（欢迎页无点）
+                                repeat(5) { index ->
+                                    val isActive = pagerState.currentPage == index + 1
+                                    val width by animateDpAsState(
+                                        targetValue = if (isActive) 24.dp else 8.dp,
+                                        animationSpec = tween(200),
+                                        label = "dotWidth"
+                                    )
+                                    val alpha by animateFloatAsState(
+                                        targetValue = if (isActive) 1f else 0.3f,
+                                        animationSpec = tween(200),
+                                        label = "dotAlpha"
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(horizontal = 4.dp)
+                                            .width(width)
+                                            .height(8.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = alpha))
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-            }
 
         // 层级 2：全局圆角和边框预览
         OOBELiveBorderPreview(
@@ -495,9 +590,26 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
             offBRX = calibBRX.value, offBRY = calibBRY.value
         )
 
+        // 层级 2.5：拖拽调整覆盖层（控制点 + 工具层）
+        MaterialTheme(colorScheme = oobeBlendedScheme) {
+            OobeCornerDragOverlay(
+                visible = dragAdjustMode,
+                radiusSet = radiusSet,
+                isLinked = isLinked,
+                isG2Enabled = isG2Enabled,
+                systemRadius = systemRadius,
+                strokeWidth = realtimeThickness,
+                handleColor = oobeBlendedScheme.primary,
+                onDraggingChanged = { dragUserDragging = it },
+                onExitKeep = { exitDragMode(false) },
+                onExitRollback = { exitDragMode(true) },
+                tutorialTargets = tutorialTargets
+            )
+        }
+
         // 层级 3：全屏彩带
         AnimatedVisibility(
-            visible = pagerState.currentPage == 6,
+            visible = pagerState.currentPage == 5,
             enter = fadeIn(animationSpec = tween(300)),
             exit = fadeOut(animationSpec = tween(800))
         ) {
@@ -512,6 +624,7 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
             val steps = listOf(
                 "调节模式" to "点击可切换调节模式\n全局同步调节模式下四角圆角一致\n若您的屏幕四角曲率不同可点击按钮切换为四角独立调节，该模式下可分别调整四个角至贴合手机屏幕圆角",
                 "G2 平滑圆角" to "开启后使用 G2 连续曲率算法，圆角线条更加圆润流畅，贴合屏幕物理曲率",
+                "拖拽调整" to "点击这个手势按钮即可进入拖拽调整模式。进入后可以直接拖动四角控制点，不需要手动计算圆角数值",
                 "基础圆角半径" to "您可通过拖动滑块，点击 +/- 按钮或点击数字调起键盘输入数字调节屏幕四个角的圆角半径大小，实时预览线条变化",
                 "卡片与调节操作说明" to "长按卡片可固定，点击重置按钮可恢复默认，点击 +/- 按钮可 ± 0.1，长按 +/- 按钮可快速连续加减",
                 "横向 X 轴曲率修正" to "微调圆角在水平方向的偏移量",
@@ -521,21 +634,22 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
             val targetIndex = when (tutorialStep) {
                 0 -> 0
                 1 -> 1
-                2, 3 -> 2
-                4 -> 3
-                5 -> 4
+                2 -> OOBE_DRAG_TARGET_GESTURE_BUTTON
+                3, 4 -> 2
+                5 -> 3
+                6 -> 4
                 else -> 0
             }
 
             TutorialOverlay(
                 currentStep = tutorialStep,
-                totalSteps = 6,
+                totalSteps = 7,
                 targetBounds = tutorialTargets[targetIndex],
                 title = steps[tutorialStep].first,
                 description = steps[tutorialStep].second,
                 onPrevious = if (tutorialStep > 0) {{ tutorialStep-- }} else null,
                 onNext = {
-                    if (tutorialStep < 5) {
+                    if (tutorialStep < 6) {
                         tutorialStep++
                     } else {
                         tutorialActive = false
@@ -546,44 +660,105 @@ fun OOBEContent(onComplete: () -> Unit, onSkip: () -> Unit) {
                     tutorialActive = false
                     markTutorialShown(context)
                 },
-                isLastStep = tutorialStep == 5
+                isLastStep = tutorialStep == 6
             )
         }
 
-        // 下载确认弹窗
-        if (showDownloadConfirm) {
-            val confirmSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-            ModalBottomSheet(
-                onDismissRequest = { showDownloadConfirm = false },
-                containerColor = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(topStart = getSystemCornerRadius(), topEnd = getSystemCornerRadius()),
-                sheetState = confirmSheetState, scrimColor = Color.Black.copy(alpha = 0.5f),
-                dragHandle = { Box(Modifier.padding(vertical = 12.dp).width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))) }
-            ) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
-                    Text("下载更新", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(16.dp))
-                    Text("是否下载更新包？", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(24.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { confirmSheetState.hide(); showDownloadConfirm = false } }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("否") }
-                        Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { confirmSheetState.hide(); showDownloadConfirm = false }; startDownloadWithPermission() }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("是", fontWeight = FontWeight.Bold) }
-                    }
-                    Spacer(Modifier.height(16.dp))
+        // 拖拽调整专属教程：复用同一个 TutorialOverlay，但步骤与高亮目标完全独立。
+        // 只在第一次真正进入拖拽调整时出现，标记与校准车间共用（看过一次就不再重复打扰）。
+        if (dragTutorialActive) {
+            val dragSteps = listOf(
+                "四角控制点" to "进入拖拽调整后，屏幕四个角都会出现控制点。拖动对应控制点，就能直接贴合实际屏幕圆角",
+                "全局同步调节" to "全局同步调节会让四个角保持一致，适合四角曲率基本相同的屏幕。需要分别贴合四个角时，可切换为四角独立调节分别调节",
+                "G2 平滑圆角" to "建议先开启 G2 平滑，再开始拖拽调整。开启后圆角曲线会更加连续，更贴合实际屏幕圆角",
+                "拖拽调整" to "在拖拽调整模式下，点击这个手势按钮可退出拖拽调整模式回到卡片滑块调整模式",
+                "选择调整方式" to "这里可以选择调整什么：全部调整、圆角半径、横向修正或纵向修正。“全部调整”一次拖动即可同时调整圆角半径与横纵修正，可先用它让线条轮廓大致贴合屏幕圆角，再用其它模式单独微调",
+                "拖一下就能看到变化" to "把左上角控制点向屏幕内部拖动试试看。上方这一整块就是实际调整区域，轮廓会实时变化，不需要计算数值，直接拖拽调整至与手机屏幕圆角贴合",
+                "重置与保留" to "↻ 重置本次拖拽调整\n× 放弃本次拖拽改动并回到普通界面\n✓ 保留本次调整并回到普通界面"
+            )
+
+            // 演示框贴住左上、扩展到控制点外侧，下边不超过模式选择器
+            val demoFrame = if (dragTutorialStep == 5) {
+                val handle = tutorialTargets[OOBE_DRAG_TARGET_HANDLE]
+                val controlRow = tutorialTargets[OOBE_DRAG_TARGET_MODE_SELECTOR]
+                if (handle == null || controlRow == null) null else {
+                    val edgePad = with(localDensity) { 10.dp.toPx() }
+                    val expansion = with(localDensity) { 30.dp.toPx() }
+                    val minSize = with(localDensity) { 82.dp.toPx() }
+                    val anchoredLeft = edgePad
+                    val anchoredTop = edgePad
+                    val right = maxOf(anchoredLeft + minSize, handle.right + expansion)
+                    val desiredBottom = maxOf(anchoredTop + minSize, handle.bottom + expansion)
+                    val bottom = minOf(controlRow.top - edgePad, desiredBottom)
+                    Rect(anchoredLeft, anchoredTop, right, maxOf(anchoredTop + 1f, bottom))
                 }
+            } else null
+
+            val dragTargetIndex = when (dragTutorialStep) {
+                0 -> OOBE_DRAG_TARGET_HANDLE
+                1 -> 0
+                2 -> 1
+                3 -> OOBE_DRAG_TARGET_GESTURE_BUTTON
+                4 -> OOBE_DRAG_TARGET_MODE_SELECTOR
+                6 -> OOBE_DRAG_TARGET_ACTIONS
+                else -> OOBE_DRAG_TARGET_HANDLE
             }
+
+            TutorialOverlay(
+                currentStep = dragTutorialStep,
+                totalSteps = 7,
+                targetBounds = if (dragTutorialStep == 5) demoFrame else tutorialTargets[dragTargetIndex],
+                title = dragSteps[dragTutorialStep].first,
+                description = dragSteps[dragTutorialStep].second,
+                dragDemoAnchor = tutorialTargets[OOBE_DRAG_TARGET_HANDLE],
+                onPrevious = if (dragTutorialStep > 0) ({ dragTutorialStep-- }) else null,
+                onNext = {
+                    if (dragTutorialStep < 6) {
+                        dragTutorialStep++
+                    } else {
+                        dragTutorialActive = false
+                        markDragTutorialShown(context)
+                    }
+                },
+                onSkip = {
+                    dragTutorialActive = false
+                    markDragTutorialShown(context)
+                },
+                isLastStep = dragTutorialStep == 6,
+                showDragDemo = dragTutorialStep == 5,
+                isUserDragging = dragUserDragging
+            )
         }
+
     }
 }
 
-// 卡片颜色
+// 卡片颜色：动态混色开启时改半透明让流动背景透出（否则浅色下是突兀的大白块），关闭保持原色。
+// 用与背景 mixAlpha 相同的 600ms 补间做颜色动画，开关切换时卡片透明度与背景渐变同步过渡
 @Composable
-fun oobeCardColor(isDark: Boolean) = DeviceUtils.cardContainerColor(isDark)
+fun oobeCardColor(isDark: Boolean): Color {
+    val base = DeviceUtils.cardContainerColor(isDark)
+    val target = if (ThemeSettings.aboutDynamicMixEnabled) base.copy(alpha = if (isDark) 0.55f else 0.50f) else base
+    return animateColorAsState(target, animationSpec = tween(600), label = "oobeCardColor").value
+}
 fun oobeCardBorder(isDark: Boolean) = if (isDark) Color.White.copy(alpha = 0.12f) else Color.Transparent
+
+// 悬浮底栏遮罩显隐上报：仅本页可见时上报「内容是否延伸到底栏之下」。
+// isVisible 参与 key——页面切换时强制重新上报一次，避免沿用离屏期间过期的报告
+@Composable
+fun ReportNavMaskVisibility(scrollState: ScrollState, isVisible: Boolean, onContentUnderBar: (Boolean) -> Unit) {
+    val contentUnderBar = scrollState.maxValue > 0 && scrollState.value < scrollState.maxValue
+    LaunchedEffect(isVisible, contentUnderBar) {
+        if (isVisible) onContentUnderBar(contentUnderBar)
+    }
+}
 
 // 1.欢迎页
 @Composable
-fun OOBEWelcomeStep(isDark: Boolean) {
+fun OOBEWelcomeStep(isDark: Boolean, isVisible: Boolean, onContentUnderBar: (Boolean) -> Unit) {
+    val view = LocalView.current
+    val scrollState = rememberScrollState()
+    ReportNavMaskVisibility(scrollState, isVisible, onContentUnderBar)
     val animEnabled = ThemeSettings.isAnimationEnabled
     val logoAlpha = remember { Animatable(if (animEnabled) 0f else 1f) }
     val logoOffset = remember { Animatable(if (animEnabled) 40f else 0f) }
@@ -591,6 +766,8 @@ fun OOBEWelcomeStep(isDark: Boolean) {
     val titleOffset = remember { Animatable(if (animEnabled) 40f else 0f) }
     val subtitleAlpha = remember { Animatable(if (animEnabled) 0f else 1f) }
     val subtitleOffset = remember { Animatable(if (animEnabled) 40f else 0f) }
+    val cardAlpha = remember { Animatable(if (animEnabled) 0f else 1f) }
+    val cardOffset = remember { Animatable(if (animEnabled) 40f else 0f) }
 
     val slideSpec = tween<Float>(400, easing = FastOutSlowInEasing)
 
@@ -606,14 +783,29 @@ fun OOBEWelcomeStep(isDark: Boolean) {
             titleOffset.animateTo(0f, slideSpec)
         }
         delay(120)
-        launch { subtitleAlpha.animateTo(1f, tween(400)) }
-        subtitleOffset.animateTo(0f, slideSpec)
+        launch {
+            launch { subtitleAlpha.animateTo(1f, tween(400)) }
+            subtitleOffset.animateTo(0f, slideSpec)
+        }
+        delay(120)
+        launch {
+            launch { cardAlpha.animateTo(1f, tween(400)) }
+            cardOffset.animateTo(0f, slideSpec)
+        }
+    }
+
+    // 横屏判定：底部的让位留白只在竖屏加（见下方注释）
+    val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.let {
+        it.screenWidthDp > it.screenHeightDp
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
+            .verticalScroll(scrollState)
+            .padding(horizontal = 24.dp)
+            // 底部 124dp 是给悬浮底栏让位。单侧内边距会把视觉中心整体上移 62dp
+            .then(if (isLandscape) Modifier else Modifier.padding(bottom = 124.dp)),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -653,141 +845,38 @@ fun OOBEWelcomeStep(isDark: Boolean) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.graphicsLayer { alpha = subtitleAlpha.value; translationY = subtitleOffset.value * density }
         )
-    }
-}
 
-// 2.更新检测
-@Composable
-fun OOBEUpdateStep(
-    isDark: Boolean,
-    isActive: Boolean,
-    hasUpdate: Boolean,
-    versionName: String,
-    changelog: String,
-    isChecking: Boolean,
-    isError: Boolean,
-    onNext: () -> Unit,
-    onRetry: () -> Unit
-) {
-    val context = LocalContext.current
-    val view = LocalView.current
-    val isHighApi = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
-    var showLinkDialog by remember { mutableStateOf<String?>(null) }
+        Spacer(Modifier.height(24.dp))
 
-    @Composable
-    fun HighApiCard() {
-        if (!isHighApi) return
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = G2Shapes.card,
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-        ) {
-            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("您的设备支持完整版", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    Text("建议获取完整版使用更多功能", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
-                }
-                TextButton(onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    showLinkDialog = "https://github.com/byHydrogen/ScreenTester/releases"
-                }) { Text("下载完整版 >", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
-            }
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 24.dp)
-            .padding(top = 80.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        val stateKey = when {
-            isChecking -> "checking"
-            isError -> "error"
-            hasUpdate -> "update"
-            else -> "none"
-        }
-
-        // 当前版本更新日志卡片
-        @Composable
-        fun CurrentVersionCard() {
-            Surface(modifier = Modifier.fillMaxWidth(), shape = G2Shapes.card, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
-                Column(modifier = Modifier.padding(20.dp).heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                    Text("当前版本 2.5 更新日志", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    MarkdownText(text = "重构 主页 网格/列表\n新增 主页 全新 卡片视图切换动画\n优化 主页 搜索测试项结果卡片动画\n修复 主页 网格视图下搜索时卡片未重排的问题\n修复 Android 15 以下 Android 版本 主界面 导航条有半透明遮罩的问题\n修复 Android 15 以下 Android 版本 历史更新日志页 导航条有半透明遮罩的问题\n修复 Android 15 以下 Android 版本 赞赏页 导航条有半透明遮罩的问题\n修复 部分 Android 设备 测试页始终显示刘海的问题（渲染进摄像头挖孔区域，避免全屏时挖孔处出现黑条）\n修复 了一些已知问题", fontSize = 13.sp, lineHeight = 18.sp, textColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
+        // 设备支持完整版引导：仅 Android 12+ 显示，点击跳完整版下载页
+        val isHighApi = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
+        var showFullVersionDialog by remember { mutableStateOf(false) }
+        if (isHighApi) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer { alpha = cardAlpha.value; translationY = cardOffset.value * density },
+                shape = G2Shapes.card,
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            ) {
+                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("您的设备支持完整版", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("建议获取完整版使用更多功能", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                    }
+                    TextButton(onClick = {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        showFullVersionDialog = true
+                    }) { Text("下载完整版 >", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
                 }
             }
         }
 
-        Crossfade(targetState = stateKey, animationSpec = tween(400), label = "updateState") { state ->
-            when (state) {
-                "checking" -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(modifier = Modifier.size(48.dp), color = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.height(24.dp))
-                            Text("正在检查更新…", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                "error" -> {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.ErrorOutline, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("检查更新失败", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("请检查网络连接后重试", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onRetry() }, modifier = Modifier.height(44.dp), shape = G2Shapes.button) { Text("重新检查", fontWeight = FontWeight.Bold) }
-                            OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); context.startActivity(Intent(context, AllChangelogActivity::class.java)) }, modifier = Modifier.height(44.dp), shape = G2Shapes.button) { Text("历史更新日志", fontWeight = FontWeight.Bold) }
-                        }
-                        Spacer(modifier = Modifier.height(24.dp))
-                        CurrentVersionCard()
-                        if (isHighApi) { Spacer(Modifier.height(12.dp)); HighApiCard() }
-                    }
-                }
-                "update" -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxSize()) {
-                        Icon(Icons.Default.SystemUpdate, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("发现新版本 $versionName", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                            MarkdownText(text = changelog, fontSize = 14.sp, lineHeight = 20.sp, textColor = MaterialTheme.colorScheme.onSurface.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth())
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-                        if (isHighApi) { Spacer(Modifier.height(16.dp)); HighApiCard() }
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                }
-                else -> {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("已是最新版本", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
-                        Spacer(modifier = Modifier.height(24.dp))
-                        OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); context.startActivity(Intent(context, AllChangelogActivity::class.java)) }, modifier = Modifier.height(44.dp), shape = G2Shapes.button) { Text("查看历史更新日志", fontWeight = FontWeight.Bold) }
-                        Spacer(modifier = Modifier.height(20.dp))
-                        CurrentVersionCard()
-                        if (isHighApi) { Spacer(Modifier.height(12.dp)); HighApiCard() }
-                    }
-                }
-            }
-        }
-
-        if (showLinkDialog != null) {
-            LinkConfirmDialog(url = showLinkDialog ?: "", onDismiss = { showLinkDialog = null })
+        if (showFullVersionDialog) {
+            LinkConfirmDialog(
+                url = "https://github.com/byHydrogen/ScreenTester/releases",
+                onDismiss = { showFullVersionDialog = false }
+            )
         }
     }
 }
@@ -796,9 +885,18 @@ fun OOBEUpdateStep(
 @Composable
 fun OOBECornerCalibrationStep(
     isDark: Boolean,
+    isVisible: Boolean,
     onCalibrationChanged: (Boolean) -> Unit,
     isG2Enabled: Boolean,
-    onG2Changed: (Boolean) -> Unit,
+    onToggleG2: () -> Unit,
+    systemRadius: Float,
+    isLinked: Boolean,
+    onLinkedChange: (Boolean) -> Unit,
+    tlAnim: Animatable<Float, *>, trAnim: Animatable<Float, *>,
+    blAnim: Animatable<Float, *>, brAnim: Animatable<Float, *>,
+    dragAdjustMode: Boolean,
+    onToggleDrag: () -> Unit,
+    onToggleLinked: () -> Unit,
     tutorialTargets: MutableMap<Int, Rect>,
     tutorialActive: Boolean,
     tutorialStep: Int,
@@ -807,53 +905,110 @@ fun OOBECornerCalibrationStep(
     tlXAnim: Animatable<Float, *>, trXAnim: Animatable<Float, *>,
     blXAnim: Animatable<Float, *>, brXAnim: Animatable<Float, *>,
     tlYAnim: Animatable<Float, *>, trYAnim: Animatable<Float, *>,
-    blYAnim: Animatable<Float, *>, brYAnim: Animatable<Float, *>
+    blYAnim: Animatable<Float, *>, brYAnim: Animatable<Float, *>,
+    onContentUnderBar: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val view = LocalView.current
-    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
-
-    val systemRadius = try {
-        val insets = (context as? android.app.Activity)?.window?.decorView?.rootWindowInsets
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            insets?.getRoundedCorner(android.view.RoundedCorner.POSITION_TOP_LEFT)?.radius?.toFloat() ?: 100f
-        } else { 100f }
-    } catch (_: Exception) { 100f }
 
     // Lite 版始终使用手动校准
     val useCustom = true
 
-    // 校准状态
-    val tlAnim = remember { Animatable(if (ThemeSettings.radiusTL < 0f) systemRadius else ThemeSettings.radiusTL) }
-    val trAnim = remember { Animatable(if (ThemeSettings.radiusTR < 0f) systemRadius else ThemeSettings.radiusTR) }
-    val blAnim = remember { Animatable(if (ThemeSettings.radiusBL < 0f) systemRadius else ThemeSettings.radiusBL) }
-    val brAnim = remember { Animatable(if (ThemeSettings.radiusBR < 0f) systemRadius else ThemeSettings.radiusBR) }
-    var isLinked by remember { mutableStateOf(true) }
     var activeSection by remember { mutableStateOf<Int?>(0) }
     var pinnedSections by remember { mutableStateOf(setOf<Int>()) }
 
-    // 教程定位时自动展开对应 SectionCard
+    // 教程自动滚动：滚动容器（视口）的窗口坐标，用于计算高亮卡片是否被底部导航遮挡
+    // 注意：不能命名为 density —— 局部变量会遮蔽 graphicsLayer {} 作用域里的 density: Float
+    val localDensity = LocalDensity.current
+    val scrollState = rememberScrollState()
+    var containerBounds by remember { mutableStateOf(Rect.Zero) }
+
+    // 横屏两栏：横屏时头部固定在左栏（覆盖层），卡片在右侧区域滚动
+    val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.let {
+        it.screenWidthDp > it.screenHeightDp
+    }
+    // 右侧内容区起点 = 左右平均分（50%），按内容区宽度算（去掉页面左右各 24dp 的 padding）
+    val landscapeStartPadding =
+        (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp - 48).dp * 0.5f
+    val rightScrollState = rememberScrollState()
+
+    // 控制行平移：拖拽模式下从原位滑到屏幕中央（横屏下右栏不在屏幕中心，X 也要移）
+    var rowHomeYInPage by remember { mutableFloatStateOf(0f) }
+    var rowHomeXCenterInWindow by remember { mutableFloatStateOf(0f) }
+    val rowTravelProgress by animateFloatAsState(
+        targetValue = if (dragAdjustMode) 1f else 0f,
+        // 弹簧回弹
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = 300f),
+        label = "oobeRowTravel"
+    )
+    val centerGroupHeightPx = with(localDensity) { 210.dp.toPx() }
+
+    // 内容是否延伸到悬浮底栏之下：滚动中=是；滚到底（尾部留白）/内容不足=否
+    ReportNavMaskVisibility(scrollState, isVisible, onContentUnderBar)
+
+    // 教程定位时自动展开对应 SectionCard，并把高亮卡片滚动到可见区域
     LaunchedEffect(tutorialActive, tutorialStep) {
+        // 把高亮卡片滚到容器底边（即底部导航上沿）之上，避免被上一步/下一步遮挡
+        suspend fun ensureTargetVisible() {
+            val targetIndex = when (tutorialStep) {
+                0 -> 0
+                1 -> 1
+                2 -> OOBE_DRAG_TARGET_GESTURE_BUTTON
+                3, 4 -> 2
+                5 -> 3
+                6 -> 4
+                else -> 0
+            }
+            val target = tutorialTargets[targetIndex] ?: return
+            if (containerBounds.height <= 0f) return
+            val marginPx = with(localDensity) { 16.dp.toPx() }
+            val topOverflow = (containerBounds.top + marginPx) - target.top
+            if (topOverflow > 1f) {
+                val clamped = (scrollState.value - topOverflow).roundToInt().coerceIn(0, scrollState.maxValue)
+                if (clamped != scrollState.value) {
+                    scrollState.animateScrollTo(clamped, tween(350, easing = FastOutSlowInEasing))
+                }
+                return
+            }
+            // 悬浮底栏（按钮行+进度指示器+底距约 180dp）会盖住内容，抬高目标时多让出这段高度
+            val navClearancePx = with(localDensity) { 180.dp.toPx() }
+            val overflow = target.bottom - (containerBounds.bottom - marginPx - navClearancePx)
+            if (overflow <= 1f) return
+            val clamped = (scrollState.value + overflow).roundToInt().coerceIn(0, scrollState.maxValue)
+            if (clamped != scrollState.value) {
+                scrollState.animateScrollTo(clamped, tween(350, easing = FastOutSlowInEasing))
+            }
+        }
+
         if (tutorialActive) {
             // 每次切换教程步骤时，立刻清除卡片的固定（图钉）状态
             pinnedSections = emptySet()
 
             // 当切换到 G2圆角高亮（Step 1）及以后时，强制恢复到“全局同步”模式
             if (tutorialStep >= 1) {
-                isLinked = true
+                onLinkedChange(true)
             }
 
             when (tutorialStep) {
-                0, 1, 2, 3 -> activeSection = 0 // 步骤0、1、2、3 都默认保持首个“基础圆角半径”卡片展开
-                4 -> activeSection = 1          // 步骤4 展开 X轴
-                5 -> activeSection = 2          // 步骤5 展开 Y轴
+                0, 1, 2, 3, 4 -> activeSection = 0 // 前 5 步都停在「基础圆角半径」卡片
+                5 -> activeSection = 1             // 横向 X 轴
+                6 -> activeSection = 2             // 纵向 Y 轴
             }
+
+            // 卡片展开约 300ms，250ms 起滚（滚动中坐标持续上报，结束后再校验补齐）
+            delay(250)
+            ensureTargetVisible()
+            delay(300)
+            ensureTargetVisible()
         } else {
-            // 教程结束后，恢复默认状态，也拔掉图钉
+            // 教程结束后，恢复默认状态，也拔掉图钉，并平滑滚回页面顶部
             activeSection = 0
             pinnedSections = emptySet()
-            isLinked = true
+            onLinkedChange(true)
+            if (scrollState.value > 0) {
+                scrollState.animateScrollTo(0, tween(350, easing = FastOutSlowInEasing))
+            }
         }
     }
 
@@ -930,92 +1085,127 @@ fun OOBECornerCalibrationStep(
         outlineVariant = lerp(darkScheme.outlineVariant, lightScheme.outlineVariant, blendFactor),
     )
 
+    // 拖拽调整模式下页面内容整体淡出 + 轻微缩小。
+    // 触摸是否命中由顶层拖拽覆盖层的拦截层负责，这里只负责视觉。
+    val modeSwitchSpec: AnimationSpec<Float> =
+        if (dragAdjustMode) tween(220, easing = FastOutSlowInEasing)
+        else tween(400, easing = FastOutSlowInEasing)
+    val calibContentAlpha by animateFloatAsState(
+        targetValue = if (dragAdjustMode) 0f else 1f,
+        animationSpec = modeSwitchSpec,
+        label = "oobeCalibContentAlpha"
+    )
+    val calibContentScale by animateFloatAsState(
+        targetValue = if (dragAdjustMode) 0.9f else 1f,
+        animationSpec = modeSwitchSpec,
+        label = "oobeCalibContentScale"
+    )
+
     MaterialTheme(colorScheme = blendedScheme) {
         Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .imePadding()
-            .padding(horizontal = 24.dp)
-            .padding(top = 80.dp, bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(imageVector = Icons.Default.CropFree, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(16.dp))
-        Text("圆角校准", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(8.dp))
-        Text("拖动下方滑块校准圆角曲线\n使其贴合你的手机屏幕弧度", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-        AnimatedVisibility(visible = useCustom) {
-            Column {
-                Spacer(Modifier.height(12.dp))
-
-                // G2 平滑 + 全局同步 按钮行
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { coords ->
+                    val pos = coords.positionInWindow()
+                    containerBounds = Rect(pos.x, pos.y, pos.x + coords.size.width, pos.y + coords.size.height)
+                }
+                // 竖屏：整页可滚（拖拽模式除外）。横屏/拖拽：把滚动修饰符整个移除 ——
+                // 必须移除滚动修饰符本身（enabled=false 不够）
+                .then(if (isLandscape || dragAdjustMode) Modifier else Modifier.verticalScroll(scrollState))
+                .imePadding()
+                .padding(horizontal = 24.dp)
+                // 竖屏保留原来的上下留白。横屏去掉 —— 否则右栏滚动视口从"屏幕顶+80dp"才开始，
+                // 内容往上滚会在半空被裁切（顶部露出的背景看着像白色块）；右栏内部自带上下留白
+                .then(if (isLandscape) Modifier else Modifier.padding(top = 80.dp, bottom = 24.dp)),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 头部抽成 lambda：竖屏流内，横屏左栏
+            val headerBlock: @Composable () -> Unit = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(imageVector = Icons.Default.CropFree, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(16.dp))
+                    Text("圆角校准", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(8.dp))
+                    Text("拖动下方滑块校准圆角曲线\n使其贴合你的手机屏幕弧度", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                }
+            }
+            // 卡片区抽成 lambda：横屏时作为右栏
+            val bodyBlock: @Composable () -> Unit = {
+                // 控制行：拖拽模式下整块平移到屏幕中央
+                // zIndex 是为了压过后面那组淡出的卡片
+                AnimatedVisibility(
+                    visible = useCustom,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .zIndex(2f)
                 ) {
-                    FilledTonalButton(
-                        modifier = Modifier
-                            .onGloballyPositioned { coords ->
-                                val pos = coords.positionInWindow()
-                                tutorialTargets[0] = Rect(pos.x, pos.y, pos.x + coords.size.width, pos.y + coords.size.height)
-                            }
-                            .weight(1.2f).height(44.dp),
-                        onClick = {
-                            isLinked = !isLinked
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                            focusManager.clearFocus()
-                            if (isLinked) {
-                                scope.launch { trAnim.animateTo(tlAnim.value, sliderSpec) }
-                                scope.launch { blAnim.animateTo(tlAnim.value, sliderSpec) }
-                                scope.launch { brAnim.animateTo(tlAnim.value, sliderSpec) }
-                                scope.launch { trXAnim.animateTo(tlXAnim.value, sliderSpec) }
-                                scope.launch { blXAnim.animateTo(tlXAnim.value, sliderSpec) }
-                                scope.launch { brXAnim.animateTo(tlXAnim.value, sliderSpec) }
-                                scope.launch { trYAnim.animateTo(tlYAnim.value, sliderSpec) }
-                                scope.launch { blYAnim.animateTo(tlYAnim.value, sliderSpec) }
-                                scope.launch { brYAnim.animateTo(tlYAnim.value, sliderSpec) }
-                            }
-                        },
-                        shape = G2Shapes.gridCard
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        // 横屏：控制行与卡片左缘对齐
+                        // 竖屏内容居中，需要 Center
+                        horizontalAlignment = if (isLandscape) Alignment.Start else Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            text = if (isLinked) "全局同步调节" else "四角独立调节",
-                            fontWeight = FontWeight.Bold, fontSize = 13.sp
+                        Spacer(Modifier.height(12.dp))
+                        Box(
+                            modifier = Modifier
+                                // 锚点必须和控制行同宽，否则 dx 恒为 0
+                                .widthIn(max = 420.dp)
+                                .fillMaxWidth()
+                                .height(0.dp)
+                                .onGloballyPositioned { coords ->
+                                    rowHomeYInPage = coords.positionInWindow().y - containerBounds.top
+                                    // 控制行中心的窗口 X
+                                    rowHomeXCenterInWindow = coords.positionInWindow().x + coords.size.width / 2f
+                                }
                         )
-                    }
 
-                    val g2BgColor by animateColorAsState(
-                        targetValue = if (isG2Enabled) lightScheme.primary else lightScheme.surfaceVariant,
-                        animationSpec = tween(300), label = "g2Bg"
-                    )
-                    val g2ContentColor by animateColorAsState(
-                        targetValue = if (isG2Enabled) lightScheme.onPrimary else lightScheme.onSurfaceVariant,
-                        animationSpec = tween(300), label = "g2Ct"
-                    )
-                    Button(
-                        onClick = {
-                            onG2Changed(!isG2Enabled)
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                        },
-                        shape = G2Shapes.gridCard,
-                        colors = ButtonDefaults.buttonColors(containerColor = g2BgColor, contentColor = g2ContentColor),
-                        modifier = Modifier
-                            .onGloballyPositioned { coords ->
-                                val pos = coords.positionInWindow()
-                                tutorialTargets[1] = Rect(pos.x, pos.y, pos.x + coords.size.width, pos.y + coords.size.height)
-                            }
-                            .weight(0.8f).height(44.dp),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
-                    ) {
-                        Text(
-                            text = if (isG2Enabled) "G2平滑:开" else "G2平滑:关",
-                            fontWeight = FontWeight.Bold, fontSize = 13.sp
-                        )
+                        // 只有控制行这一块被位移
+                        Box(
+                            modifier = Modifier
+                                // 与拖拽工具层同一限宽（420dp），拖拽时两行左右对齐；
+                                // widthIn 必须在 fillMaxWidth 之前
+                                .widthIn(max = 420.dp)
+                                .fillMaxWidth()
+                                .offset {
+                                    val targetY = (containerBounds.height - centerGroupHeightPx) / 2f
+                                    val dy = (targetY - rowHomeYInPage) * rowTravelProgress
+                                    // 横屏下右栏不在屏幕中心，拖拽时控制行也要横移到屏幕中线；
+                                    val screenCenterX = (containerBounds.left + containerBounds.right) / 2f
+                                    val dx = (screenCenterX - rowHomeXCenterInWindow) * rowTravelProgress
+                                    IntOffset(dx.roundToInt(), dy.roundToInt())
+                                }
+                        ) {
+                            OOBECalibrationControlRow(
+                                isLinked = isLinked,
+                                isG2Enabled = isG2Enabled,
+                                dragAdjustMode = dragAdjustMode,
+                                onLinkedChange = { onToggleLinked() },
+                                onToggleG2 = onToggleG2,
+                                onToggleDrag = onToggleDrag,
+                                lightScheme = lightScheme,
+                                tutorialTargets = tutorialTargets
+                            )
+                        }
+
+                        Spacer(Modifier.height(12.dp))
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
+                // 三张调节卡片（淡出 + 缩放，拖拽时不再响应触摸）
+                AnimatedVisibility(visible = useCustom) {
+                    Column(
+                        modifier = Modifier
+                            // 统一 420dp 限宽（在 fillMaxWidth 之前）
+                            .widthIn(max = 420.dp)
+                            .fillMaxWidth()
+                            .blockTouchesWhile(dragAdjustMode)
+                            .graphicsLayer {
+                                alpha = calibContentAlpha
+                                scaleX = calibContentScale
+                                scaleY = calibContentScale
+                            },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
 
                 Box(modifier = Modifier.onGloballyPositioned { coords ->
                     val pos = coords.positionInWindow()
@@ -1089,11 +1279,172 @@ fun OOBECornerCalibrationStep(
                     CalibrationSliderGroup(isLinked, tlYAnim, trYAnim, blYAnim, brYAnim, 0f, sliderSpec, -150f..150f, scope)
                 }
                 } // end Box (target 4)
+                    } // Column（卡片内容）
+                } // AnimatedVisibility(useCustom)
+            } // bodyBlock
 
-                Spacer(Modifier.height(40.dp))
+            // 横屏：右侧滚动区占满整页宽（内容用 start padding 推到右半区、靠左排），
+            // 左栏头部做固定覆盖层。
+            // 不能用 Row 分栏：滚动视口会被切成右半边
+            if (isLandscape) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rightScrollState, enabled = !dragAdjustMode)
+                            // 内容推到右侧区域并靠左排（不再在右半边里居中——那样整页看着偏）
+                            .padding(start = landscapeStartPadding),
+                        // 内容不足一屏时垂直居中；上下留白需对称
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Spacer(Modifier.height(176.dp))
+                        bodyBlock()
+                        Spacer(Modifier.height(176.dp))
+                    }
+                    // 左栏：固定覆盖层（不随右侧内容滚动），挂与卡片组相同的淡出/缩放
+                    Box(
+                        modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            modifier = Modifier.graphicsLayer {
+                                alpha = calibContentAlpha
+                                scaleX = calibContentScale
+                                scaleY = calibContentScale
+                            }
+                        ) { headerBlock() }
+                    }
+                }
+            } else {
+                // 竖屏：头部也要挂淡出/缩放
+                Column(
+                    modifier = Modifier.graphicsLayer {
+                        alpha = calibContentAlpha
+                        scaleX = calibContentScale
+                        scaleY = calibContentScale
+                    }
+                ) { headerBlock() }
+                bodyBlock()
+                // 尾部留白：滚动到最后时内容能完全抬到悬浮底栏上方（教程抬高依赖这段余量）
+                Spacer(Modifier.height(176.dp))
             }
         }
     }
+}
+
+// 圆角校准页的控制行（全局同步 / G2 平滑 / 拖拽调整）。
+// 拖拽模式下由调用方整块平移到屏幕中央。
+@Composable
+internal fun OOBECalibrationControlRow(
+    isLinked: Boolean,
+    isG2Enabled: Boolean,
+    dragAdjustMode: Boolean,
+    onLinkedChange: (Boolean) -> Unit,
+    onToggleG2: () -> Unit,
+    onToggleDrag: () -> Unit,
+    lightScheme: ColorScheme,
+    tutorialTargets: MutableMap<Int, Rect>
+) {
+    val view = LocalView.current
+    val focusManager = LocalFocusManager.current
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        FilledTonalButton(
+            modifier = Modifier
+                .onGloballyPositioned { coords ->
+                    val pos = coords.positionInWindow()
+                    tutorialTargets[0] = Rect(pos.x, pos.y, pos.x + coords.size.width, pos.y + coords.size.height)
+                }
+                .weight(1.2f).height(44.dp),
+            onClick = {
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                focusManager.clearFocus()
+                onLinkedChange(!isLinked)
+            },
+            shape = G2Shapes.gridCard
+        ) {
+            Text(
+                text = if (isLinked) "全局同步调节" else "四角独立调节",
+                fontWeight = FontWeight.Bold, fontSize = 13.sp
+            )
+        }
+
+        val g2BgColor by animateColorAsState(
+            targetValue = if (isG2Enabled) lightScheme.primary else lightScheme.surfaceVariant,
+            animationSpec = tween(300), label = "g2Bg"
+        )
+        val g2ContentColor by animateColorAsState(
+            targetValue = if (isG2Enabled) lightScheme.onPrimary else lightScheme.onSurfaceVariant,
+            animationSpec = tween(300), label = "g2Ct"
+        )
+        Button(
+            onClick = {
+                onToggleG2()
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            },
+            shape = G2Shapes.gridCard,
+            colors = ButtonDefaults.buttonColors(containerColor = g2BgColor, contentColor = g2ContentColor),
+            modifier = Modifier
+                .onGloballyPositioned { coords ->
+                    val pos = coords.positionInWindow()
+                    tutorialTargets[1] = Rect(pos.x, pos.y, pos.x + coords.size.width, pos.y + coords.size.height)
+                }
+                .weight(0.8f).height(44.dp),
+            elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+        ) {
+            // 字号过大时 "开/关" 会被挤到第二行并被按钮高度裁掉：
+            // 单行显示 + 溢出时按 0.9 等比缩小字号，直到塞进按钮
+            var g2TextSize by remember { mutableStateOf(13f) }
+            Text(
+                text = if (isG2Enabled) "G2平滑:开" else "G2平滑:关",
+                fontWeight = FontWeight.Bold, fontSize = g2TextSize.sp,
+                maxLines = 1,
+                softWrap = false,
+                onTextLayout = { result ->
+                    if (result.hasVisualOverflow && g2TextSize > 8f) g2TextSize *= 0.9f
+                }
+            )
+        }
+
+        // 拖拽调整入口：进入后隐藏本页内容与悬浮底栏，只留圆角轮廓与四角控制点
+        val dragBtnBgColor by animateColorAsState(
+            targetValue = if (dragAdjustMode) lightScheme.primary else lightScheme.surfaceVariant,
+            animationSpec = tween(300), label = "dragBtnBg"
+        )
+        val dragBtnContentColor by animateColorAsState(
+            targetValue = if (dragAdjustMode) lightScheme.onPrimary else lightScheme.onSurfaceVariant,
+            animationSpec = tween(300), label = "dragBtnCt"
+        )
+        Surface(
+            onClick = onToggleDrag,
+            modifier = Modifier
+                .onGloballyPositioned { coords ->
+                    val pos = coords.positionInWindow()
+                    tutorialTargets[OOBE_DRAG_TARGET_GESTURE_BUTTON] = Rect(
+                        pos.x, pos.y, pos.x + coords.size.width, pos.y + coords.size.height
+                    )
+                }
+                .size(44.dp),
+            shape = G2Shapes.gridCard,
+            color = dragBtnBgColor,
+            contentColor = dragBtnContentColor,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Gesture,
+                    contentDescription = if (dragAdjustMode) "关闭拖拽调整" else "拖拽调整圆角",
+                    tint = dragBtnContentColor
+                )
+            }
+        }
     }
 }
 
@@ -1101,207 +1452,488 @@ fun OOBECornerCalibrationStep(
 @Composable
 fun OOBETestLineStep(
     isDark: Boolean,
+    isVisible: Boolean,
     onThicknessChange: ((Float) -> Unit)? = null,
     onSegmentLengthChange: ((Float) -> Unit)? = null,
-    onDraggingChange: ((Boolean) -> Unit)? = null
+    onDraggingChange: ((Boolean) -> Unit)? = null,
+    onContentUnderBar: (Boolean) -> Unit = {}
 ) {
+    val scrollState = rememberScrollState()
+    // 内容是否延伸到悬浮底栏之下：滚动中=是；滚到底（尾部留白）/内容不足=否
+    ReportNavMaskVisibility(scrollState, isVisible, onContentUnderBar)
+
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+    val landscapeMinHeight = configuration.screenHeightDp.dp
+
+    // 横屏右栏独立滚动
+    val rightScrollState = rememberScrollState()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            // 竖屏：整页滚动
+            // 横屏：右栏滚动，左栏头部固定
+            .then(if (isLandscape) Modifier else Modifier.verticalScroll(scrollState))
             .padding(horizontal = 24.dp)
-            .padding(top = 80.dp, bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            // 竖屏保留上下留白；横屏垂直居中
+            .then(
+                if (isLandscape) Modifier.heightIn(min = landscapeMinHeight)
+                else Modifier.padding(top = 80.dp, bottom = 24.dp)
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = if (isLandscape) Arrangement.Center else Arrangement.Top
     ) {
-        Icon(imageVector = Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(16.dp))
-        Text("测试线条", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(8.dp))
-        Text("自定义测试线条的粗细和颜色", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(16.dp))
+        // 头部抽成 lambda：竖屏流内，横屏左栏
+        val headerBlock: @Composable () -> Unit = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(imageVector = Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(16.dp))
+                Text("测试线条", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(8.dp))
+                Text("自定义测试线条的粗细和颜色", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            }
+        }
+        // 卡片区抽成 lambda：横屏作为右栏
+        val bodyBlock: @Composable () -> Unit = {
+            // 竖屏"副标题 → 卡片"的间距；横屏不需要
+            if (!isLandscape) Spacer(Modifier.height(16.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = G2Shapes.card,
-            colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
-            border = BorderStroke(1.dp, oobeCardBorder(isDark))
-        ) {
-            ColorPickerSection(
-                showTopDivider = false,
-                onThicknessChange = onThicknessChange,
-                onSegmentLengthChange = onSegmentLengthChange,
-                onDraggingChange = onDraggingChange
-            )
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = G2Shapes.card,
+                colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
+                border = BorderStroke(1.dp, oobeCardBorder(isDark))
+            ) {
+                Column {
+                    TestLineSettingsPanel(
+                        showTopDivider = false,
+                        onThicknessChange = onThicknessChange,
+                        onSegmentLengthChange = onSegmentLengthChange,
+                        onDraggingChange = onDraggingChange
+                    )
+                    // 与设置页同一份入口：进「线条与配色」页调线条/背景/文字并实时预览
+                    MoreSettingsEntry(
+                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 16.dp)
+                    )
+                }
+            }
+        }
+
+        // 横屏：与圆角校准步同一套结构 —— 全宽滚动（内容用 start padding 推到右半区、靠左排）+ 左栏固定头部
+        val landscapeStartPadding = (configuration.screenWidthDp - 48).dp * 0.5f
+        if (isLandscape) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rightScrollState)
+                        .padding(start = landscapeStartPadding),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    // 顶部留白 48；内容溢出时 Center 不生效
+                    Spacer(Modifier.height(48.dp))
+                    Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                        bodyBlock()
+                    }
+                    Spacer(Modifier.height(176.dp))
+                }
+                Box(
+                    modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight(),
+                    contentAlignment = Alignment.Center
+                ) { headerBlock() }
+            }
+        } else {
+            headerBlock()
+            // 内容限宽 420
+            Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                bodyBlock()
+            }
+            Spacer(Modifier.height(176.dp))
         }
     }
 }
 
 // 5.纯净模式
 @Composable
-fun OOBEPureModeStep(isDark: Boolean) {
+fun OOBEPureModeStep(isDark: Boolean, isVisible: Boolean, onContentUnderBar: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val view = LocalView.current
+
+    val scrollState = rememberScrollState()
+    ReportNavMaskVisibility(scrollState, isVisible, onContentUnderBar)
+
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+    // 横屏垂直居中需要最小高度
+    val landscapeMinHeight = configuration.screenHeightDp.dp
+
+    // 横屏右栏独立滚动
+    val rightScrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            // 竖屏：整页滚动
+            // 横屏：右栏滚动，左栏头部固定
+            .then(if (isLandscape) Modifier else Modifier.verticalScroll(scrollState))
             .padding(horizontal = 24.dp)
-            .padding(top = 80.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            // 竖屏保留上下留白；横屏垂直居中
+            .then(
+                if (isLandscape) Modifier.heightIn(min = landscapeMinHeight)
+                else Modifier.padding(top = 80.dp, bottom = 24.dp)
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        // 横屏：内容整体垂直居中
+        verticalArrangement = if (isLandscape) Arrangement.Center else Arrangement.Top
     ) {
-        Icon(
-            imageVector = Icons.Default.Visibility,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-        Spacer(Modifier.height(24.dp))
-        Text("纯净模式", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = "开启后将隐藏测试页中的部分文案和底部参数\n隐藏右上角切换按钮，改为双击屏幕切换模式",
-            fontSize = 15.sp,
-            lineHeight = 24.sp,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(Modifier.height(40.dp))
-
-        var isEnabled by remember { mutableStateOf(ThemeSettings.isCompactModeEnabled) }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = G2Shapes.card,
-            colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
-            border = BorderStroke(1.dp, oobeCardBorder(isDark))
-        ) {
-            Row(
-                modifier = Modifier.padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("启用纯净模式", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = if (isEnabled) "已开启 - 测试页将显示纯净界面" else "已关闭 - 测试页将显示完整信息",
-                        fontSize = 13.sp,
-                        color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = isEnabled,
-                    onCheckedChange = {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                        isEnabled = it
-                        ThemeSettings.saveCompactModeConfig(context, it)
-                    }
+        // 头部抽成 lambda：竖屏流内，横屏左栏
+        val headerBlock: @Composable () -> Unit = {
+            // 必须包一层 Column：直接放进 Box 会重叠
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.Visibility,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(24.dp))
+                Text("纯净模式", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "开启后将隐藏测试页中的部分文案和底部参数\n隐藏右上角切换按钮，改为双击屏幕切换模式",
+                    fontSize = 15.sp,
+                    lineHeight = 24.sp,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+
+        // 卡片区抽成 lambda：横屏作为右栏
+        val bodyBlock: @Composable () -> Unit = {
+            // 竖屏"副标题 → 卡片"的间距；横屏不需要
+            if (!isLandscape) Spacer(Modifier.height(40.dp))
+
+            // 直接读全局状态：在「线条与配色」等页改动后回到本步骤实时同步
+            val isEnabled = ThemeSettings.isCompactModeEnabled
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = G2Shapes.card,
+                colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
+                border = BorderStroke(1.dp, oobeCardBorder(isDark))
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("启用纯净模式", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = if (isEnabled) "已开启 - 测试页将显示纯净界面" else "已关闭 - 测试页将显示完整信息",
+                            fontSize = 13.sp,
+                            color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isEnabled,
+                        onCheckedChange = {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            ThemeSettings.saveCompactModeConfig(context, it)
+                        }
+                    )
+                }
+            }
+        }
+
+        // 横屏两栏：全宽滚动 + 左栏固定覆盖层
+        val landscapeStartPadding = (configuration.screenWidthDp - 48).dp * 0.5f
+        if (isLandscape) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rightScrollState)
+                        .padding(start = landscapeStartPadding),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Spacer(Modifier.height(176.dp))
+                    Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                        bodyBlock()
+                    }
+                    Spacer(Modifier.height(176.dp))
+                }
+                Box(
+                    modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight(),
+                    contentAlignment = Alignment.Center
+                ) { headerBlock() }
+            }
+        } else {
+            headerBlock()
+            // 内容限宽 420
+            Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                bodyBlock()
+            }
+            Spacer(Modifier.height(176.dp))
         }
     }
 }
 
 // 6.界面高级动效
 @Composable
-fun OOBEAdvancedUIStep(isDark: Boolean) {
+fun OOBEAdvancedUIStep(isDark: Boolean, isVisible: Boolean, onContentUnderBar: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val view = LocalView.current
+
+    val scrollState = rememberScrollState()
+    ReportNavMaskVisibility(scrollState, isVisible, onContentUnderBar)
+
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+    val landscapeMinHeight = configuration.screenHeightDp.dp
+
+    // 横屏右栏独立滚动
+    val rightScrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            // 竖屏：整页滚动
+            // 横屏：右栏滚动，左栏头部固定
+            .then(if (isLandscape) Modifier else Modifier.verticalScroll(scrollState))
             .padding(horizontal = 24.dp)
-            .padding(top = 80.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            // 竖屏保留上下留白；横屏垂直居中
+            .then(
+                if (isLandscape) Modifier.heightIn(min = landscapeMinHeight)
+                else Modifier.padding(top = 80.dp, bottom = 24.dp)
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = if (isLandscape) Arrangement.Center else Arrangement.Top
     ) {
-        Icon(
-            imageVector = Icons.Default.AutoAwesome,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-        Spacer(Modifier.height(24.dp))
-        Text("界面高级动效", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = "自定义卡片动效与设置页线条预览",
-            fontSize = 15.sp,
-            lineHeight = 24.sp,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(Modifier.height(40.dp))
-
-        var isEnabled by remember { mutableStateOf(ThemeSettings.isAnimationEnabled) }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = G2Shapes.card,
-            colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
-            border = BorderStroke(1.dp, oobeCardBorder(isDark))
-        ) {
-            Row(
-                modifier = Modifier.padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("启用卡片动效", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = if (isEnabled) "已开启 - 卡片将带有更多动画效果" else "已关闭 - 卡片将直接显示",
-                        fontSize = 13.sp,
-                        color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = isEnabled,
-                    onCheckedChange = {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                        isEnabled = it
-                        ThemeSettings.saveAnimationConfig(context, it)
-                    }
+        // 头部抽成 lambda：竖屏流内，横屏左栏
+        val headerBlock: @Composable () -> Unit = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(24.dp))
+                Text("界面高级动效", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "自定义卡片动效与设置页线条预览",
+                    fontSize = 15.sp,
+                    lineHeight = 24.sp,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        // 卡片区抽成 lambda：横屏作为右栏
+        val bodyBlock: @Composable () -> Unit = {
+            // 竖屏"副标题 → 卡片"的间距；横屏不需要
+            if (!isLandscape) Spacer(Modifier.height(40.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = G2Shapes.card,
-            colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
-            border = BorderStroke(1.dp, oobeCardBorder(isDark))
-        ) {
-            Row(
-                modifier = Modifier.padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // 直接读全局状态：在其他页面改动后回到本步骤实时同步
+            val isEnabled = ThemeSettings.isAnimationEnabled
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = G2Shapes.card,
+                colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
+                border = BorderStroke(1.dp, oobeCardBorder(isDark))
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text("设置页线条预览", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = if (ThemeSettings.isSettingsLinePreviewEnabled) "已开启 - 调节线条时将显示实时线条预览" else "已关闭 - 调节线条时将不会显示线条预览",
-                        fontSize = 13.sp,
-                        color = if (ThemeSettings.isSettingsLinePreviewEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("启用卡片动效", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = if (isEnabled) "已开启 - 卡片将带有更多动画效果" else "已关闭 - 卡片将直接显示",
+                            fontSize = 13.sp,
+                            color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isEnabled,
+                        onCheckedChange = {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            ThemeSettings.saveAnimationConfig(context, it)
+                        }
                     )
                 }
-                Switch(
-                    checked = ThemeSettings.isSettingsLinePreviewEnabled,
-                    onCheckedChange = {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                        ThemeSettings.saveSettingsLinePreviewConfig(context, it)
-                    }
-                )
             }
+        }
+
+        // 横屏两栏：全宽滚动 + 左栏固定覆盖层
+        val landscapeStartPadding = (configuration.screenWidthDp - 48).dp * 0.5f
+        if (isLandscape) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rightScrollState)
+                        .padding(start = landscapeStartPadding),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Spacer(Modifier.height(176.dp))
+                    Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                        bodyBlock()
+                        Spacer(Modifier.height(16.dp))
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = G2Shapes.card,
+                            colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
+                            border = BorderStroke(1.dp, oobeCardBorder(isDark))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(20.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("设置页线条预览", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = if (ThemeSettings.isSettingsLinePreviewEnabled) "已开启 - 调节线条时将显示实时线条预览" else "已关闭 - 调节线条时将不会显示线条预览",
+                                        fontSize = 13.sp,
+                                        color = if (ThemeSettings.isSettingsLinePreviewEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = ThemeSettings.isSettingsLinePreviewEnabled,
+                                    onCheckedChange = {
+                                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                        ThemeSettings.saveSettingsLinePreviewConfig(context, it)
+                                    }
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(16.dp))
+
+                        // 背景动态混色：与关于页/历史更新页共用同一开关，切换时背景渐变过渡
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = G2Shapes.card,
+                            colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
+                            border = BorderStroke(1.dp, oobeCardBorder(isDark))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(20.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("背景动态混色", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = if (ThemeSettings.aboutDynamicMixEnabled) "已开启 - 背景将缓慢流动混色" else "已关闭 - 背景使用静态渐变",
+                                        fontSize = 13.sp,
+                                        color = if (ThemeSettings.aboutDynamicMixEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = ThemeSettings.aboutDynamicMixEnabled,
+                                    onCheckedChange = {
+                                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                        ThemeSettings.saveAboutDynamicMixConfig(context, it)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(176.dp))
+                }
+                Box(
+                    modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight(),
+                    contentAlignment = Alignment.Center
+                ) { headerBlock() }
+            }
+        } else {
+            headerBlock()
+            // 内容限宽 420
+            Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                bodyBlock()
+                Spacer(Modifier.height(16.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = G2Shapes.card,
+                    colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
+                    border = BorderStroke(1.dp, oobeCardBorder(isDark))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("设置页线条预览", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = if (ThemeSettings.isSettingsLinePreviewEnabled) "已开启 - 调节线条时将显示实时线条预览" else "已关闭 - 调节线条时将不会显示线条预览",
+                                fontSize = 13.sp,
+                                color = if (ThemeSettings.isSettingsLinePreviewEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = ThemeSettings.isSettingsLinePreviewEnabled,
+                            onCheckedChange = {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                ThemeSettings.saveSettingsLinePreviewConfig(context, it)
+                            }
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // 背景动态混色：与关于页/历史更新页共用同一开关，切换时背景渐变过渡
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = G2Shapes.card,
+                    colors = CardDefaults.cardColors(containerColor = oobeCardColor(isDark)),
+                    border = BorderStroke(1.dp, oobeCardBorder(isDark))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("背景动态混色", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = if (ThemeSettings.aboutDynamicMixEnabled) "已开启 - 背景将缓慢流动混色" else "已关闭 - 背景使用静态渐变",
+                                fontSize = 13.sp,
+                                color = if (ThemeSettings.aboutDynamicMixEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = ThemeSettings.aboutDynamicMixEnabled,
+                            onCheckedChange = {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                ThemeSettings.saveAboutDynamicMixConfig(context, it)
+                            }
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(176.dp))
         }
     }
 }
 
 // 7.完成页
 @Composable
-fun OOBECompletionStep(isDark: Boolean, isActive: Boolean = false) {
+fun OOBECompletionStep(isDark: Boolean, isActive: Boolean = false, isVisible: Boolean, onContentUnderBar: (Boolean) -> Unit = {}) {
+    val scrollState = rememberScrollState()
+    ReportNavMaskVisibility(scrollState, isVisible, onContentUnderBar)
     val animEnabled = ThemeSettings.isAnimationEnabled
     var animPlayed by remember { mutableStateOf(false) }
     val iconAlpha = remember { Animatable(if (animEnabled) 0f else 1f) }
@@ -1341,7 +1973,14 @@ fun OOBECompletionStep(isDark: Boolean, isActive: Boolean = false) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 24.dp),
+                .verticalScroll(scrollState)
+                .padding(horizontal = 24.dp)
+                // 底部让位是单侧的，会把中心上移；横屏不加
+                .then(
+                    if (androidx.compose.ui.platform.LocalConfiguration.current
+                            .let { it.screenWidthDp > it.screenHeightDp }
+                    ) Modifier else Modifier.padding(bottom = 124.dp)
+                ),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -1497,7 +2136,7 @@ fun OOBELiveBorderPreview(
     offBLX: Float = 0f, offBLY: Float = 0f,
     offBRX: Float = 0f, offBRY: Float = 0f
 ) {
-    val targetAlpha = fixedAlpha ?: if (pagerState.currentPage in 2..3) 1f else 0f
+    val targetAlpha = fixedAlpha ?: if (pagerState.currentPage in 1..2) 1f else 0f
     val alpha by animateFloatAsState(
         targetValue = targetAlpha,
         animationSpec = tween(500),
@@ -1529,7 +2168,7 @@ fun OOBELiveBorderPreview(
     val brX = (baseBR + if (ThemeSettings.useCustomRadius) offBRX else 0f).coerceAtLeast(0f)
     val brY = (baseBR + if (ThemeSettings.useCustomRadius) offBRY else 0f).coerceAtLeast(0f)
 
-    val isCalibrationPage = if (fixedAlpha != null) false else (pagerState.currentPage == 2)
+    val isCalibrationPage = if (fixedAlpha != null) false else (pagerState.currentPage == 1)
 
     // 拖动时实时更新，页面切换时保留动画
     val animatedStrokeW by animateFloatAsState(

@@ -22,22 +22,72 @@ enum class PresetScheme {
 object ThemeSettings {
     var darkModeState by mutableStateOf(DarkModeConfig.FOLLOW_SYSTEM)
     var testLineColor by mutableIntStateOf(android.graphics.Color.WHITE)
+
+    // 线条测试模式的自定义背景色（默认黑，与旧行为一致）
+    var testLineBgColor by mutableIntStateOf(android.graphics.Color.BLACK)
+    // 线条测试模式的文字颜色（默认白）
+    var testLineTextColor by mutableIntStateOf(android.graphics.Color.WHITE)
+    // 全局：所有文字是否跟随线条颜色（默认 false —— 默认使用自定义字体色）
+    var textFollowsLine by mutableStateOf(false)
+    // "黑边遮挡测试"那一行单独控制：true = 跟随字体色，false = 跟随线条色
+    var titleFollowsText by mutableStateOf(false)
+    // 精度模式是否也使用自定义背景色（默认 false）
+    var precisionUsesCustomBg by mutableStateOf(false)
+    // 测试页"机型"文字不透明度（%）：100 = 原始，范围 40~120
+    var deviceNameOpacityPct by mutableIntStateOf(100)
+
     var isMaxBrightnessEnabled by mutableStateOf(false)
     var testBrightnessValue by mutableFloatStateOf(1.0f)
 
     // 测试页屏幕常亮开关
     var isKeepScreenOnEnabled by mutableStateOf(false)
     var userPresets by mutableStateOf<List<Int>>(emptyList())
+    // 背景色卡片的独立用户预设（与线条色分开）
+    var bgUserPresets by mutableStateOf<List<Int>>(emptyList())
+    // 背景预设里被用户长按删除的内置颜色：删除后不再显示，重新「保存为预设」即恢复
+    var bgRemovedPresets by mutableStateOf<Set<Int>>(emptySet())
+    // 背景预设的 12 个内置色（面板显示与「是否内置」判断的唯一来源）
+    val defaultBgPresets = listOf(
+        -16777216, // 黑
+        -13619152, // #303030
+        -2565928,  // #D8D8D8
+        -1,        // 白
+        -9263105,  // 蓝
+        -16711936, // 绿
+        -7981735,  // 梅
+        -11556712, // 松石青
+        -7952269,  // 苔绿
+        -2509733,  // 芥末黄
+        -1533306,  // 珊瑚
+        -5994791   // 藤紫
+    )
     var useCustomRadius by mutableStateOf(false)
     var radiusTL by mutableFloatStateOf(-1f)
     var radiusTR by mutableFloatStateOf(-1f)
     var radiusBL by mutableFloatStateOf(-1f)
     var radiusBR by mutableFloatStateOf(-1f)
 
+    // 圆角校准页：四角 X/Y 曲率修正值。继续使用原有 SharedPreferences key，兼容已有用户数据。
+    var radiusTLX by mutableFloatStateOf(0f)
+    var radiusTRX by mutableFloatStateOf(0f)
+    var radiusBLX by mutableFloatStateOf(0f)
+    var radiusBRX by mutableFloatStateOf(0f)
+    var radiusTLY by mutableFloatStateOf(0f)
+    var radiusTRY by mutableFloatStateOf(0f)
+    var radiusBLY by mutableFloatStateOf(0f)
+    var radiusBRY by mutableFloatStateOf(0f)
+
+    // 圆角校准页：是否记忆上次使用的拖拽调整模式
+    var isDragAdjustModeEnabled by mutableStateOf(false)
+    var isCalibrationLinked by mutableStateOf(true)
+
     // 线条粗细存储，默认 5.0 像素
     var testLineThickness by mutableFloatStateOf(5f)
 
     var isAnimationEnabled by mutableStateOf(true)
+
+    // 关于页动态混色开关（默认关闭；开启后关于页等界面背景色缓慢流动混合，关闭保持静态渐变）
+    var aboutDynamicMixEnabled by mutableStateOf(false)
 
     // 设置页线条预览开关
     var isSettingsLinePreviewEnabled by mutableStateOf(true)
@@ -98,6 +148,42 @@ object ThemeSettings {
         context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putInt("line_color", color).apply()
     }
 
+    // 保存线条测试模式的自定义背景色
+    fun saveLineBgColor(context: Context, color: Int) {
+        testLineBgColor = color
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putInt("test_line_bg_color", color).apply()
+    }
+
+    // 保存线条测试模式的自定义文字颜色
+    fun saveLineTextColor(context: Context, color: Int) {
+        testLineTextColor = color
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putInt("test_line_text_color", color).apply()
+    }
+
+    // 全局：所有文字是否跟随线条颜色
+    fun saveTextFollowsLine(context: Context, enabled: Boolean) {
+        textFollowsLine = enabled
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("test_text_follows_line", enabled).apply()
+    }
+
+    // "黑边遮挡测试"那行字单独控制：true = 跟随字体色
+    fun saveTitleFollowsText(context: Context, enabled: Boolean) {
+        titleFollowsText = enabled
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("title_follows_text", enabled).apply()
+    }
+
+    // 精度模式是否也使用自定义背景色
+    fun savePrecisionUsesCustomBg(context: Context, enabled: Boolean) {
+        precisionUsesCustomBg = enabled
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("test_precision_uses_custom_bg", enabled).apply()
+    }
+
+    // 测试页"机型"文字不透明度（%）
+    fun saveDeviceNameOpacityPct(context: Context, pct: Int) {
+        deviceNameOpacityPct = pct
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putInt("device_name_opacity_pct", pct).apply()
+    }
+
     fun saveMaxBrightness(context: Context, enabled: Boolean) {
         isMaxBrightnessEnabled = enabled
         context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("max_brightness", enabled).apply()
@@ -123,6 +209,12 @@ object ThemeSettings {
     fun saveAnimationConfig(context: Context, enabled: Boolean) {
         isAnimationEnabled = enabled
         context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("is_animation_enabled", enabled).apply()
+    }
+
+    // 保存关于页动态混色开关
+    fun saveAboutDynamicMixConfig(context: Context, enabled: Boolean) {
+        aboutDynamicMixEnabled = enabled
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("about_dynamic_mix_enabled", enabled).apply()
     }
 
     fun saveSettingsLinePreviewConfig(context: Context, enabled: Boolean) {
@@ -251,6 +343,30 @@ object ThemeSettings {
         context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putString("user_presets", userPresets.joinToString(",")).apply()
     }
 
+    // 添加背景色卡片的用户预设（重新保存曾被删除的内置色＝从删除名单移出、恢复内置显示；
+    // 内置色不进用户预设，避免和内置列表重复显示）
+    fun addBgUserPreset(context: Context, color: Int) {
+        bgRemovedPresets = bgRemovedPresets - color
+        if (color !in defaultBgPresets && !bgUserPresets.contains(color)) {
+            bgUserPresets = bgUserPresets + color
+        }
+        saveBgPresetsToLocal(context)
+    }
+
+    // 从背景色卡片移除预设：内置色记入删除名单，用户预设直接移除
+    fun removeBgPreset(context: Context, color: Int) {
+        bgUserPresets = bgUserPresets - color
+        bgRemovedPresets = bgRemovedPresets + color
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
+            .putString("test_line_bg_presets", bgUserPresets.joinToString(","))
+            .putString("test_line_bg_removed_presets", bgRemovedPresets.joinToString(","))
+            .apply()
+    }
+
+    private fun saveBgPresetsToLocal(context: Context) {
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putString("test_line_bg_presets", bgUserPresets.joinToString(",")).apply()
+    }
+
     fun saveCustomRadius(context: Context, enabled: Boolean, tl: Float, tr: Float, bl: Float, br: Float) {
         useCustomRadius = enabled
         radiusTL = tl; radiusTR = tr; radiusBL = bl; radiusBR = br
@@ -261,6 +377,44 @@ object ThemeSettings {
         prefs.putFloat("r_bl", bl)
         prefs.putFloat("r_br", br)
         prefs.apply()
+    }
+
+    // 保存圆角校准页四角 X/Y 曲率修正值。保留原有 key，确保旧版本数据无缝迁移。
+    fun saveRadiusCorrections(
+        context: Context,
+        tlX: Float, trX: Float, blX: Float, brX: Float,
+        tlY: Float, trY: Float, blY: Float, brY: Float
+    ) {
+        radiusTLX = tlX
+        radiusTRX = trX
+        radiusBLX = blX
+        radiusBRX = brX
+        radiusTLY = tlY
+        radiusTRY = trY
+        radiusBLY = blY
+        radiusBRY = brY
+
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
+            .putFloat("r_tl_x", radiusTLX)
+            .putFloat("r_tr_x", radiusTRX)
+            .putFloat("r_bl_x", radiusBLX)
+            .putFloat("r_br_x", radiusBRX)
+            .putFloat("r_tl_y", radiusTLY)
+            .putFloat("r_tr_y", radiusTRY)
+            .putFloat("r_bl_y", radiusBLY)
+            .putFloat("r_br_y", radiusBRY)
+            .apply()
+    }
+
+    // 圆角校准页：是否记忆上次使用的拖拽调整模式
+    fun saveDragAdjustMode(context: Context, enabled: Boolean) {
+        isDragAdjustModeEnabled = enabled
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("drag_adjust_mode_enabled", enabled).apply()
+    }
+
+    fun saveCalibrationLinkedMode(context: Context, linked: Boolean) {
+        isCalibrationLinked = linked
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("calibration_is_linked", linked).apply()
     }
 
     // App每次启动时读取所有设置
@@ -274,6 +428,15 @@ object ThemeSettings {
             prefs.edit().putBoolean("is_animation_enabled", defaultEnabled).apply()
         } else {
             isAnimationEnabled = prefs.getBoolean("is_animation_enabled", true)
+        }
+
+        // 读取关于页动态混色开关（首次默认跟随动效开关的性能检测线）
+        if (!prefs.contains("about_dynamic_mix_enabled")) {
+            val defaultMix = checkDevicePerformance(context)
+            aboutDynamicMixEnabled = defaultMix
+            prefs.edit().putBoolean("about_dynamic_mix_enabled", defaultMix).apply()
+        } else {
+            aboutDynamicMixEnabled = prefs.getBoolean("about_dynamic_mix_enabled", false)
         }
 
         // 读取精简黑边遮挡测试页文字设置
@@ -312,6 +475,14 @@ object ThemeSettings {
         // 读取线条颜色
         testLineColor = prefs.getInt("line_color", android.graphics.Color.WHITE)
 
+        // 读取测试页背景色 / 文字色及其联动设置
+        testLineBgColor = prefs.getInt("test_line_bg_color", android.graphics.Color.BLACK)
+        testLineTextColor = prefs.getInt("test_line_text_color", android.graphics.Color.WHITE)
+        textFollowsLine = prefs.getBoolean("test_text_follows_line", false)
+        titleFollowsText = prefs.getBoolean("title_follows_text", false)
+        precisionUsesCustomBg = prefs.getBoolean("test_precision_uses_custom_bg", false)
+        deviceNameOpacityPct = prefs.getInt("device_name_opacity_pct", 100)
+
         val customSchemesStr = prefs.getString("custom_gradient_schemes", "") ?: ""
         if (customSchemesStr.isNotEmpty()) {
             customGradientSchemes = customSchemesStr.split("|").mapNotNull { s ->
@@ -348,7 +519,23 @@ object ThemeSettings {
         radiusBL = prefs.getFloat("r_bl", -1f)
         radiusBR = prefs.getFloat("r_br", -1f)
 
-        // 读取预设列表 (如果为空则初始化默认 6 色)
+        // 读取圆角校准页四角 X/Y 曲率修正值：沿用旧 key，不丢失已有用户数据
+        radiusTLX = prefs.getFloat("r_tl_x", 0f)
+        radiusTRX = prefs.getFloat("r_tr_x", 0f)
+        radiusBLX = prefs.getFloat("r_bl_x", 0f)
+        radiusBRX = prefs.getFloat("r_br_x", 0f)
+        radiusTLY = prefs.getFloat("r_tl_y", 0f)
+        radiusTRY = prefs.getFloat("r_tr_y", 0f)
+        radiusBLY = prefs.getFloat("r_bl_y", 0f)
+        radiusBRY = prefs.getFloat("r_br_y", 0f)
+
+        // 读取圆角校准页最近一次使用的拖拽调整模式
+        isDragAdjustModeEnabled = prefs.getBoolean("drag_adjust_mode_enabled", false)
+        isCalibrationLinked = prefs.getBoolean("calibration_is_linked", true)
+
+        // 读取预设列表：首次运行初始化默认 12 色；
+        // 3.0 预设扩充迁移：往已有列表追加新增的 6 色（已手动添加过的不重复，
+        // 用户删过的旧默认色不恢复）；一次性执行，之后删掉的新色不会再被补回
         val presetStr = prefs.getString("user_presets", null)
         if (presetStr == null) {
             userPresets = listOf(
@@ -357,12 +544,33 @@ object ThemeSettings {
                 -1845525, // TertiaryContainer
                 -1254181, // PrimaryContainer
                 -7981735, // Primary
-                -5431481  // Error 红
+                -5431481, // Error 红
+                -7679029, // 青
+                -9579124, // 莫奈绿
+                -663924, // 奶黄
+                -19045, // 蜜桃橙
+                -3561493, // 藕紫
+                -11900006 // 深蓝（浅色背景下的线条用）
             )
             savePresetsToLocal(context)
         } else if (presetStr.isNotEmpty()) {
             userPresets = presetStr.split(",").mapNotNull { it.toIntOrNull() }
+            if (!prefs.getBoolean("user_presets_expanded_12", false)) {
+                val addedPresets = listOf(-7679029, -9579124, -663924, -19045, -3561493, -11900006)
+                    .filter { it !in userPresets }
+                if (addedPresets.isNotEmpty()) {
+                    userPresets = userPresets + addedPresets
+                    savePresetsToLocal(context)
+                }
+                prefs.edit().putBoolean("user_presets_expanded_12", true).apply()
+            }
         }
+
+        // 背景色卡片独立预设（无默认值）+ 被删除的内置预设名单
+        val bgPresetStr = prefs.getString("test_line_bg_presets", "") ?: ""
+        bgUserPresets = bgPresetStr.split(",").mapNotNull { it.toIntOrNull() }
+        val bgRemovedStr = prefs.getString("test_line_bg_removed_presets", "") ?: ""
+        bgRemovedPresets = bgRemovedStr.split(",").mapNotNull { it.toIntOrNull() }.toSet()
     }
 
     // 硬件性能检测算法

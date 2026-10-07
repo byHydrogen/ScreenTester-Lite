@@ -6,15 +6,15 @@ plugins {
 android {
     namespace = "com.hydrogen.screentester.lite"
     compileSdk {
-        version = release(36)
+        version = release(37)
     }
 
     defaultConfig {
         applicationId = "com.hydrogen.screentester.lite"
         minSdk = 24
-        targetSdk = 36
-        versionCode = 5
-        versionName = "2.5"
+        targetSdk = 37
+        versionCode = 6
+        versionName = "3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

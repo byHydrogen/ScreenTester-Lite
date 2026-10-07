@@ -18,6 +18,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -195,27 +196,39 @@ fun HomePage() {
         searchKeywords[card.originalIndex].any { it.contains(searchQuery, true) }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // Tab 可见性检测放在满宽 Box 上：内容限宽后网格不再横跨整屏，位置判断会失真
+            .onGloballyPositioned { coords ->
+                val currentX = coords.positionInWindow().x
+                if (currentX != lastX) {
+                    val isVisibleNow = currentX > -screenWidthPx / 2 && currentX < screenWidthPx / 2
+                    if (isVisibleNow && !wasVisible) {
+                        // 从 设置/关于 Tab 切回主页时，清空搜索框并重新触发瀑布流浮出
+                        clearSearch()
+                        animationTrigger++
+                    }
+                    wasVisible = isVisibleNow
+                    lastX = currentX
+                }
+            }
+    ) {
         LazyVerticalGrid(
-            columns = GridCells.Fixed(if (ThemeSettings.isGridView) 2 else 1),
+            // 自适应列数，最小列宽按屏幕分档：
+            // 手机（sw<600dp）用 150dp —— 360dp 宽的旧款 720p 机型也能排 2 列（168dp 会算出 1 列），
+            //   横屏/较宽竖屏自动加列；大屏（sw≥600dp）168dp，平板 3~4 列
+            columns = if (ThemeSettings.isGridView) {
+                if (DeviceUtils.isLargeScreen()) GridCells.Adaptive(168.dp) else GridCells.Adaptive(150.dp)
+            } else GridCells.Fixed(1),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
-                .fillMaxSize()
+                .align(Alignment.TopCenter)
+                .fillMaxHeight()
+                // 大屏适配：内容限宽居中
+                .widthIn(max = DeviceUtils.ContentMaxWidth)
                 .padding(horizontal = 24.dp)
-                .onGloballyPositioned { coords ->
-                    val currentX = coords.positionInWindow().x
-                    if (currentX != lastX) {
-                        val isVisibleNow = currentX > -screenWidthPx / 2 && currentX < screenWidthPx / 2
-                        if (isVisibleNow && !wasVisible) {
-                            // 从 设置/关于 Tab 切回主页时，清空搜索框并重新触发瀑布流浮出
-                            clearSearch()
-                            animationTrigger++
-                        }
-                        wasVisible = isVisibleNow
-                        lastX = currentX
-                    }
-                }
         ) {
             item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -246,14 +259,18 @@ fun HomePage() {
                         val windowInfo = LocalWindowInfo.current
                         val screenWidthPx = windowInfo.containerSize.width
                         val density = LocalDensity.current
-                        val screenWidthDp = with(density) { screenWidthPx.toDp() }
+                        // 跟随内容限宽收敛
+                        // 否则按窗口宽度算出来的搜索框会远超内容区，盖住旁边的视图切换按钮
+                        val contentWidthDp = with(density) {
+                            minOf(screenWidthPx.toDp(), DeviceUtils.ContentMaxWidth)
+                        }
                         val searchBoxWidth by animateDpAsState(
                             targetValue = if (isFocused) {
-                                // 聚焦时：占据整个宽度
-                                screenWidthDp - 48.dp // 减去左右 padding
+                                // 聚焦时：占据整个内容宽度
+                                contentWidthDp - 48.dp // 减去左右 padding
                             } else {
                                 // 未聚焦时：占据部分宽度（留出按钮空间）
-                                screenWidthDp - 48.dp - 56.dp - 12.dp // 减去 padding、按钮宽度、间距
+                                contentWidthDp - 48.dp - 56.dp - 12.dp // 减去 padding、按钮宽度、间距
                             },
                             animationSpec = spring(
                                 dampingRatio = 0.8f,
@@ -880,7 +897,6 @@ fun NoResultContent(searchQuery: String) {
 fun UpdateSheetDialog(onDismiss: () -> Unit) {
     val view = LocalView.current; val context = LocalContext.current; val scope = rememberCoroutineScope()
     val systemCornerRadius = getSystemCornerRadius()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val downloadState = GlobalUpdateState.downloadState
     DownloadProgressPoller(downloadState)
     val downloadPercent by animateFloatAsState(targetValue = downloadState.progress, animationSpec = tween(200), label = "dlp")
@@ -894,17 +910,17 @@ fun UpdateSheetDialog(onDismiss: () -> Unit) {
         }
         downloadState.start(context, url, "ScreenTester_Lite_${GlobalUpdateState.latestVersionName}.apk")
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(topStart = systemCornerRadius, topEnd = systemCornerRadius), sheetState = sheetState, scrimColor = Color.Black.copy(alpha = 0.5f), dragHandle = { Box(Modifier.padding(vertical = 12.dp).width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))) }) {
-        val conn = remember { object : NestedScrollConnection { override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset = if (available.y > 0) available.copy(x = 0f) else Offset.Zero; override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity = if (available.y > 0) available.copy(x = 0f) else Velocity.Zero } }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp).nestedScroll(conn)) {
+    G2BottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(topStart = systemCornerRadius, topEnd = systemCornerRadius), scrimColor = Color.Black.copy(alpha = 0.5f), dragHandle = { Box(Modifier.padding(vertical = 12.dp).width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))) }) { onClose ->
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
             Text("发现新版本 ${GlobalUpdateState.latestVersionName}", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
             Spacer(Modifier.height(16.dp)); HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)); Spacer(Modifier.height(16.dp))
-            MarkdownText(text = GlobalUpdateState.latestChangelog, fontSize = 14.sp, lineHeight = 20.sp, textColor = MaterialTheme.colorScheme.onSurface.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp).verticalScroll(rememberScrollState()))
+            // 滚动交给 TextView 自己（LinkOnlyMovementMethod）：选择手柄拖到边缘时才能自动滚动
+            MarkdownText(text = GlobalUpdateState.latestChangelog, fontSize = 14.sp, lineHeight = 20.sp, textColor = MaterialTheme.colorScheme.onSurface.toArgb(), linkColor = MaterialTheme.colorScheme.primary.toArgb(), highlightColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f).toArgb(), onLinkClick = { showLinkDialog = it }, modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp))
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Box(Modifier.clip(G2Shapes.button).clickable { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(UpdateManager.releasePageUrl()))) }.padding(horizontal = 12.dp, vertical = 4.dp)) { Text("浏览器下载", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) } }
             Spacer(Modifier.height(1.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { sheetState.hide(); onDismiss() } }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) { Text("稍后", fontWeight = FontWeight.Bold) }
-                Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { sheetState.hide(); onDismiss() }; GlobalUpdateState.hasNewVersion = false; UpdateManager.ignoreVersion(context, GlobalUpdateState.latestVersionName) }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) { Text("忽略此版本", fontWeight = FontWeight.Bold) }
+                Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onClose() }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) { Text("稍后", fontWeight = FontWeight.Bold) }
+                Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onClose(); GlobalUpdateState.hasNewVersion = false; UpdateManager.ignoreVersion(context, GlobalUpdateState.latestVersionName) }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) { Text("忽略此版本", fontWeight = FontWeight.Bold) }
             }
             Spacer(Modifier.height(12.dp))
             val isDl = downloadState.status == DownloadStatus.Downloading; val isPs = downloadState.status == DownloadStatus.Paused
@@ -913,6 +929,6 @@ fun UpdateSheetDialog(onDismiss: () -> Unit) {
             Spacer(Modifier.height(8.dp))
         }
     }
-    if (showDownloadConfirm) { val cs = rememberModalBottomSheetState(skipPartiallyExpanded = true); ModalBottomSheet(onDismissRequest = { showDownloadConfirm = false }, containerColor = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(topStart = systemCornerRadius, topEnd = systemCornerRadius), sheetState = cs, scrimColor = Color.Black.copy(alpha = 0.5f), dragHandle = { Box(Modifier.padding(vertical = 12.dp).width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))) }) { Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) { Text("流量提醒", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center); Spacer(Modifier.height(16.dp)); Text("当前为移动网络，是否继续下载？", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center); Spacer(Modifier.height(24.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) { OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { cs.hide(); showDownloadConfirm = false } }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("取消") }; Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); scope.launch { cs.hide(); showDownloadConfirm = false }; startDownloadWithPermission(pendingDownloadUrl) }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("继续", fontWeight = FontWeight.Bold) } } } } }
+    if (showDownloadConfirm) { G2BottomSheet(onDismissRequest = { showDownloadConfirm = false }, containerColor = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(topStart = systemCornerRadius, topEnd = systemCornerRadius), scrimColor = Color.Black.copy(alpha = 0.5f), dragHandle = { Box(Modifier.padding(vertical = 12.dp).width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))) }) { onClose -> Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) { Text("流量提醒", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center); Spacer(Modifier.height(16.dp)); Text("当前为移动网络，是否继续下载？", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center); Spacer(Modifier.height(24.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) { OutlinedButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onClose() }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("取消") }; Button(onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onClose(); startDownloadWithPermission(pendingDownloadUrl) }, modifier = Modifier.weight(1f).height(48.dp), shape = G2Shapes.button) { Text("继续", fontWeight = FontWeight.Bold) } } } } }
     if (showLinkDialog != null) { LinkConfirmDialog(url = showLinkDialog ?: "", onDismiss = { showLinkDialog = null }) }
 }
